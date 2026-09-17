@@ -60,8 +60,8 @@ class PluginProcessMonitor(
         java.util.concurrent.ConcurrentHashMap
             .newKeySet<String>()
 
-    /** Stored manifests and jar paths for re-spawning after crash. */
-    private val pluginSpawnInfo = java.util.concurrent.ConcurrentHashMap<String, Pair<PluginManifest, String>>()
+    /** Stored launch decisions, manifests and JAR paths for re-spawning after a crash. */
+    private val pluginSpawnInfo = java.util.concurrent.ConcurrentHashMap<String, PluginSpawnInfo>()
 
     /**
      * Start monitoring a plugin process.
@@ -74,7 +74,12 @@ class PluginProcessMonitor(
         jarPath: String? = null,
     ) {
         if (manifest != null && jarPath != null) {
-            pluginSpawnInfo[pluginId] = manifest to jarPath
+            pluginSpawnInfo[pluginId] =
+                PluginSpawnInfo(
+                    manifest = manifest,
+                    jarPath = jarPath,
+                    securityRequired = isSecurityRequired(jarPath),
+                )
         }
         val info =
             PluginHealthInfo(
@@ -130,10 +135,10 @@ class PluginProcessMonitor(
         logger.info("Restarting plugin: {}", pluginId)
 
         try {
-            val (manifest, jarPath) = spawnInfo
+            val manifest = spawnInfo.manifest
+            val jarPath = spawnInfo.jarPath
             spawner.terminate(pluginId).getOrThrow()
-            val securityRequired = isSecurityRequired(jarPath)
-            spawner.spawn(manifest, jarPath, securityRequired = securityRequired).getOrThrow()
+            spawner.spawn(manifest, jarPath, securityRequired = spawnInfo.securityRequired).getOrThrow()
             updateState(
                 pluginId,
                 current.copy(
@@ -165,7 +170,7 @@ class PluginProcessMonitor(
     fun switchToInProcess(pluginId: String) {
         val current = _healthStates.value[pluginId] ?: return
         val spawnInfo = pluginSpawnInfo[pluginId]
-        if (spawnInfo != null && isSecurityRequired(spawnInfo.second)) {
+        if (spawnInfo != null && spawnInfo.securityRequired) {
             updateState(
                 pluginId,
                 current.copy(
@@ -259,4 +264,10 @@ class PluginProcessMonitor(
                     true
                 },
             )
+
+    private data class PluginSpawnInfo(
+        val manifest: PluginManifest,
+        val jarPath: String,
+        val securityRequired: Boolean,
+    )
 }
