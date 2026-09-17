@@ -180,12 +180,13 @@ wait_for_ssh() {
 }
 
 wait_for_bootstrap() {
+    local wait_for_cloud_init=$1
     for _ in {1..180}; do
         if ssh_guest 'sudo test -f /var/lib/boss-cageforge-bootstrap-complete' >/dev/null 2>&1; then
             # The marker is written by the final cloud-init command. Wait until that
             # command has returned before powering off; otherwise the next restricted
             # boot may resume package setup and leave the guest unresponsive.
-            if ssh_guest 'cloud-init status --wait >/dev/null 2>&1'; then
+            if [[ "$wait_for_cloud_init" != true ]] || ssh_guest 'cloud-init status --wait >/dev/null 2>&1'; then
                 return
             fi
         fi
@@ -202,13 +203,13 @@ wait_for_bootstrap() {
 echo '[boss] bootstrapping native guest in unrestricted mode'
 start_guest unrestricted
 wait_for_ssh
-wait_for_bootstrap
+wait_for_bootstrap true
 stop_guest
 
 echo '[boss] running native security smoke in restricted guest'
 start_guest restricted
 wait_for_ssh
-wait_for_bootstrap
+wait_for_bootstrap false
 set +e
 ssh_guest timeout --kill-after=10s 180s bash -s <<'EOF'
 set -euo pipefail
