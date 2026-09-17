@@ -46,13 +46,15 @@ concurrency:
 permissions:
   contents: read
 
-# This lane intentionally runs the native security smoke in a disposable QEMU/KVM guest.
-# A normal ubuntu runner is not a controlled Linux kernel: unprivileged user namespaces may
-# be disabled by the host policy (for example, uid-map setup can fail with EPERM), and a green
-# host-side test would not prove that Cageforge can enforce its Bubblewrap boundary. The guest
-# image is pinned and verified, its namespace prerequisites are bootstrapped and probed, and
-# the smoke then runs with restricted guest networking. Missing KVM is a hard failure, never a
-# successful skip. Ordinary JVM/process/IPC tests remain in the portable BOSS CI jobs.
+# This workflow owns native security smoke on all supported desktop backends. Linux runs in a
+# disposable QEMU/KVM guest because an ordinary Ubuntu runner is not a controlled kernel:
+# unprivileged user namespaces may be disabled by host policy (for example, uid-map setup can
+# fail with EPERM), and a green host-side test would not prove Cageforge's Bubblewrap boundary.
+# The Linux image is pinned and verified, its namespace prerequisites are probed, and the smoke
+# runs with restricted guest networking. macOS and Windows use their native runners because
+# Seatbelt and the Windows setup/Job Object boundary must be exercised on their own kernels.
+# Missing native prerequisites are hard failures, never successful skips. Ordinary JVM/process/IPC
+# tests remain in the portable BOSS CI jobs.
 jobs:
   linux-qemu:
     name: BOSS native security smoke in Cageforge QEMU
