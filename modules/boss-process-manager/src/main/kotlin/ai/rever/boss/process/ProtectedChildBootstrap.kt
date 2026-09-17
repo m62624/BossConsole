@@ -38,12 +38,17 @@ object ProtectedChildBootstrap {
         require(separator + 1 < args.size) { "Missing child argv" }
         val cwd = File(args[cwdIndex + 1])
         require(cwd.isAbsolute) { "Protected working directory must be absolute" }
-        val normalizedCwd = cwd.normalize()
-        require(normalizedCwd.isDirectory) { "Invalid protected working directory" }
+        val canonicalCwd = cwd.canonicalFile
+        require(canonicalCwd.isDirectory) { "Invalid protected working directory" }
         val command = args.subList(separator + 1, args.size)
         require(command.isNotEmpty()) { "Protected child argv must not be empty" }
         require(command.none { '\u0000' in it }) { "Protected child argv must not contain NUL" }
-        require(File(command.first()).isAbsolute) { "Protected child executable must be absolute" }
-        return Parsed(normalizedCwd, command)
+        val executable = File(command.first())
+        require(executable.isAbsolute) { "Protected child executable must be absolute" }
+        val canonicalExecutable = executable.canonicalFile
+        require(canonicalExecutable.isFile && canonicalExecutable.canExecute()) {
+            "Protected child executable is not executable: ${canonicalExecutable.path}"
+        }
+        return Parsed(canonicalCwd, listOf(canonicalExecutable.path) + command.drop(1))
     }
 }

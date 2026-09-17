@@ -171,7 +171,7 @@ class ProcessSpawner
             require(config.workDir.isAbsolute) {
                 "Protected process working directory must be absolute"
             }
-            val workDir = config.workDir.normalize()
+            val workDir = config.workDir.canonicalFile
             require(workDir.isDirectory) {
                 "Protected process working directory must be an existing absolute directory"
             }
@@ -187,9 +187,9 @@ class ProcessSpawner
             }
             val executable = File(command.first())
             require(executable.isAbsolute) { "Protected process executable must be absolute" }
-            val normalizedExecutable = executable.normalize()
-            require(normalizedExecutable.isFile && normalizedExecutable.canExecute()) {
-                "Protected process executable is not executable: ${normalizedExecutable.path}"
+            val canonicalExecutable = executable.canonicalFile
+            require(canonicalExecutable.isFile && canonicalExecutable.canExecute()) {
+                "Protected process executable is not executable: ${canonicalExecutable.path}"
             }
         }
 
@@ -197,7 +197,7 @@ class ProcessSpawner
             command: List<String>,
             workDir: File,
         ): List<String> {
-            val java = File(findJavaExecutable()).normalize()
+            val java = File(findJavaExecutable()).canonicalFile
             require(java.isAbsolute && java.isFile && java.canExecute()) {
                 "Protected bootstrap requires an absolute executable Java runtime: ${java.path}"
             }
