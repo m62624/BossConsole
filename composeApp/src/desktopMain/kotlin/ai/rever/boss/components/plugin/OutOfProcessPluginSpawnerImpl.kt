@@ -330,6 +330,17 @@ private fun cleanupUnregisteredProcess(
     }
 }
 
+/** Read the current runtime on every spawn; replacing a JAR must invalidate the previous decision. */
+private fun validateRuntime(runtimeClasspath: String) {
+    IpcTransport.requireCompatibleRuntime(File(runtimeClasspath).toPath())
+    val manifest = PluginManifestReader.readFromJar(runtimeClasspath)
+    when (val compatibility = IpcVersion.isCompatible(manifest.minIpcVersion)) {
+        is IpcVersion.CompatResult.Compatible -> Unit
+        is IpcVersion.CompatResult.UnknownRuntime -> error("The microkernel runtime must declare minIpcVersion")
+        is IpcVersion.CompatResult.Incompatible -> error(compatibility.reason)
+    }
+}
+
 /**
  * Kernel-side process ID for a plugin.
  *
@@ -382,15 +393,4 @@ private fun awaitForcedExit(process: ai.rever.boss.process.ManagedProcess?): Boo
     return process?.process?.let {
         runCatching { it.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
     } ?: true
-}
-
-/** Read the current runtime on every spawn; replacing a JAR must invalidate the previous decision. */
-private fun validateRuntime(runtimeClasspath: String) {
-    IpcTransport.requireCompatibleRuntime(File(runtimeClasspath).toPath())
-    val manifest = PluginManifestReader.readFromJar(runtimeClasspath)
-    when (val compatibility = IpcVersion.isCompatible(manifest.minIpcVersion)) {
-        is IpcVersion.CompatResult.Compatible -> Unit
-        is IpcVersion.CompatResult.UnknownRuntime -> error("The microkernel runtime must declare minIpcVersion")
-        is IpcVersion.CompatResult.Incompatible -> error(compatibility.reason)
-    }
 }
