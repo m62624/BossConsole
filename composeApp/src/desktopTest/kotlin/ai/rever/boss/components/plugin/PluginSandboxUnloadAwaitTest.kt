@@ -285,6 +285,36 @@ class PluginSandboxUnloadAwaitTest {
         }
 
     @Test
+    fun `protected install fails closed without a protected spawner`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            val manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("Protected plugins must not create a host context") },
+                )
+            withTempDir { tempDir ->
+                val jar =
+                    PluginJarTestFixtures.writeJar(
+                        tempDir,
+                        "security-required-plugin.jar",
+                        "com.example.security-required",
+                        "1.0.0",
+                        securityRequired = true,
+                    )
+
+                val result = manager.installPlugin(jar.absolutePath)
+
+                assertTrue(result.isFailure)
+                assertFalse(manager.getPluginInfo("com.example.security-required") != null)
+            }
+            manager.disposeWindow()
+            sandboxManager.dispose()
+        }
+
+    @Test
     fun `protected disable preserves ownership when termination fails`() =
         runBlocking {
             val sandboxManager = PluginSandboxManagerImpl()
