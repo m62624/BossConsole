@@ -101,10 +101,8 @@ jobs:
             --max-workers=2 \
             --console=plain
 
-      - name: Archive the checked-out BOSS source
+      - name: Stage native security test bundle
         run: |
-          git archive --format=tar.gz \
-            --output="$RUNNER_TEMP/BossConsole-source.tar.gz" HEAD
           cp \
             modules/boss-process-manager/build/nativeSecurityTest/boss-native-security-test-bundle.tar.gz \
             "$RUNNER_TEMP/boss-native-security-test-bundle.tar.gz"
@@ -116,7 +114,6 @@ jobs:
         run: |
           ./ci/run-cageforge-native-linux-vm.sh \
             --image "$CAGEFORGE_VM_IMAGE" \
-            --source-archive "$RUNNER_TEMP/BossConsole-source.tar.gz" \
             --test-bundle "$RUNNER_TEMP/boss-native-security-test-bundle.tar.gz"
 
       - name: Upload QEMU and guest boot logs
