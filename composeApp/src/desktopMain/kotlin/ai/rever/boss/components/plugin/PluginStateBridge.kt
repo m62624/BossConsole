@@ -15,8 +15,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -75,6 +77,14 @@ class PluginStateBridge(
         scope.launch { syncLoop() }
     }
 
+    /** Wait until an authenticated state RPC has completed successfully. */
+    suspend fun awaitConnected(timeoutMs: Long) {
+        require(timeoutMs > 0) { "Connection timeout must be positive" }
+        withTimeout(timeoutMs) {
+            connected.first { it }
+        }
+    }
+
     /**
      * Send an intent from the kernel UI to the plugin process.
      *
@@ -103,7 +113,7 @@ class PluginStateBridge(
      * Fetch the current state snapshot from the child process.
      * Used on initial connection or after reconnection.
      */
-    private suspend fun fetchCurrentState() {
+    private suspend fun fetchCurrentState(): Boolean {
         try {
             val request =
                 PluginStateRequest
@@ -118,8 +128,12 @@ class PluginStateBridge(
                 pluginId,
                 snapshot.version,
             )
+            return true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.warn("Failed to fetch current state for plugin={}: {}", pluginId, e.message)
+            return false
         }
     }
 
@@ -132,7 +146,7 @@ class PluginStateBridge(
         while (scope.isActive) {
             try {
                 // Fetch initial state snapshot
-                fetchCurrentState()
+                check(fetchCurrentState()) { "Initial plugin state request failed" }
                 _connected.value = true
 
                 // Start bidirectional stream

@@ -125,6 +125,10 @@ class OutOfProcessPluginSpawnerImpl(
             )
         bridge.start()
         try {
+            bridge.awaitConnected(session.config.startupTimeoutMs)
+            check(sessionRegistry.isCurrent(session)) {
+                "Plugin session was replaced before authenticated bridge readiness: ${session.pluginId}"
+            }
             session.markMcpReady(channel, bridge)
             session.markRunning()
         } catch (error: IllegalStateException) {
