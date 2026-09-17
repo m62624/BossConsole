@@ -134,6 +134,9 @@ class DynamicPluginManager(
      */
     private val mutex = Mutex()
 
+    /** Plugin IDs whose code is intentionally never loaded into this JVM. */
+    private val securityRequiredPluginIds = ConcurrentHashMap.newKeySet<String>()
+
     /**
      * The underlying plugin loader.
      */
@@ -930,6 +933,68 @@ class DynamicPluginManager(
                         ),
                     )
 
+                    // Read the manifest and the host-owned security marker before
+                    // the dynamic loader creates a plugin classloader. A
+                    // security-required plugin must be born inside the native
+                    // process boundary; loading it here first would defeat the
+                    // boundary even if its later child launch used Cageforge.
+                    val preflightManifest =
+                        runCatching { PluginManifestReader.readFromJar(jarPath) }
+                            .getOrElse { error ->
+                                return Result.failure(error)
+                            }
+                    if (SecurityRequiredPlugin.isMarked(jarPath)) {
+                        val spawner =
+                            outOfProcessSpawner
+                                ?: return Result.failure(
+                                    IllegalStateException(
+                                        "Security-required plugin ${preflightManifest.pluginId} " +
+                                            "has no protected spawner",
+                                    ),
+                                )
+                        if (!enabled) {
+                            val info =
+                                DynamicPluginInfo(
+                                    manifest = preflightManifest,
+                                    jarPath = jarPath,
+                                    state = PluginState.DISABLED,
+                                    loadedAt = System.currentTimeMillis(),
+                                    enabled = false,
+                                )
+                            updatePluginState(preflightManifest.pluginId, info)
+                            return Result.success(info)
+                        }
+                        if (!canAccess(preflightManifest)) {
+                            val info =
+                                DynamicPluginInfo(
+                                    manifest = preflightManifest,
+                                    jarPath = jarPath,
+                                    state = PluginState.DISABLED,
+                                    loadedAt = System.currentTimeMillis(),
+                                    enabled = false,
+                                    errorMessage = "Plugin access denied",
+                                )
+                            updatePluginState(preflightManifest.pluginId, info)
+                            return Result.success(info)
+                        }
+                        spawner.spawn(preflightManifest, jarPath).getOrElse { error ->
+                            return Result.failure(error)
+                        }
+                        securityRequiredPluginIds += preflightManifest.pluginId
+                        val info =
+                            DynamicPluginInfo(
+                                manifest = preflightManifest,
+                                jarPath = jarPath,
+                                state = PluginState.LOADED,
+                                loadedAt = System.currentTimeMillis(),
+                                enabled = true,
+                            )
+                        updatePluginState(preflightManifest.pluginId, info)
+                        notifyListeners { it.pluginLoaded(preflightManifest) }
+                        emitPluginLifecycle(preflightManifest.pluginId, PluginLifecycleState.LOADED)
+                        return Result.success(info)
+                    }
+
                     // Load the plugin
                     val loadResult = pluginLoader.loadPlugin(jarPath)
                     if (loadResult.isFailure) {
@@ -1407,6 +1472,29 @@ class DynamicPluginManager(
         waitForGC: Boolean,
         closeTabsAcrossWindows: Boolean,
     ): Result<Unit> {
+        // A security-required plugin is child-only: it deliberately has no
+        // host classloader or tracking context to unload. Terminate the native
+        // child first, then retire the manager state. Calling pluginLoader here
+        // would incorrectly manufacture an in-process ownership path.
+        if (securityRequiredPluginIds.contains(pluginId)) {
+            return runCatching {
+                val manifest =
+                    getPluginInfo(pluginId)?.manifest
+                        ?: error("Security-required plugin state missing: $pluginId")
+                outOfProcessSpawner
+                    ?.terminate(pluginId)
+                    ?.getOrThrow()
+                    ?: error("Security-required plugin $pluginId has no protected spawner")
+                securityRequiredPluginIds.remove(pluginId)
+                removePluginState(pluginId)
+                notifyListeners { it.pluginUnloaded(manifest) }
+                emitPluginLifecycle(pluginId, PluginLifecycleState.UNLOADED)
+            }.fold(
+                onSuccess = { Result.success(Unit) },
+                onFailure = { Result.failure(it) },
+            )
+        }
+
         // Close this plugin's open tabs on the UI thread FIRST, while its
         // classloader is still open, so Compose disposal resolves its
         // lazily-loaded onDispose lambdas instead of crashing against a

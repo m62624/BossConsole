@@ -9,6 +9,7 @@ import ai.rever.boss.kernel.isReaping
 import ai.rever.boss.kernel.reapSpawnGate
 import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.loader.PluginManifestReader
+import ai.rever.boss.process.CageforgePolicyCeiling
 import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
 import ai.rever.boss.process.ProcessRegistry
@@ -99,8 +100,28 @@ class OutOfProcessPluginSpawnerImpl(
                 // it, a plugin using an api-jar-only type (ConsoleLogsAPI
                 // pattern) dies in the child with NoClassDefFoundError.
                 val apiJar = System.getProperty("boss.api.jar")?.takeIf { it.isNotBlank() }
+                val requestedWorkDir = File(projectPath.ifEmpty { System.getProperty("user.dir") })
+                require(requestedWorkDir.isAbsolute) {
+                    "Protected plugin working directory must be absolute: ${requestedWorkDir.path}"
+                }
+                val workDir = requestedWorkDir.canonicalFile
+                require(workDir.isDirectory) {
+                    "Protected plugin working directory must exist: ${workDir.path}"
+                }
+                val pluginJarInput = File(jarPath)
+                require(pluginJarInput.isAbsolute) {
+                    "Protected plugin JAR path must be absolute: ${pluginJarInput.path}"
+                }
+                val pluginJar = pluginJarInput.canonicalFile
+                require(pluginJar.isFile) { "Plugin JAR does not exist: ${pluginJar.path}" }
+                val apiJarPath =
+                    apiJar?.let {
+                        val input = File(it)
+                        require(input.isAbsolute) { "Protected API JAR path must be absolute: ${input.path}" }
+                        input.canonicalFile.path
+                    }
                 val classpath =
-                    listOfNotNull(runtimeClasspath, jarPath, apiJar)
+                    listOfNotNull(runtimeClasspath, pluginJar.path, apiJarPath)
                         .joinToString(File.pathSeparator)
 
                 val config =
@@ -112,12 +133,41 @@ class OutOfProcessPluginSpawnerImpl(
                         classpath = classpath,
                         nativeImagePath = manifest.nativeImagePath?.takeIf { it.isNotEmpty() },
                         jvmArgs = buildJvmArgs(),
-                        workDir = File(projectPath.ifEmpty { System.getProperty("user.dir") }),
+                        workDir = workDir,
                         restartPolicy = RestartPolicy.ON_FAILURE,
                         maxRestarts = manifest.sandbox.maxRestartAttempts,
-                        environment = buildEnvironment(jarPath) + ("BOSS_PLUGIN_ID" to pluginId),
+                        environment = buildEnvironment(pluginJar.path, workDir.path) + ("BOSS_PLUGIN_ID" to pluginId),
                         startupTimeoutMs = manifest.healthContract?.startupTimeoutMs ?: 30_000,
                         heartbeatIntervalMs = manifest.healthContract?.heartbeatIntervalMs ?: 5_000,
+                        cageforge =
+                            if (SecurityRequiredPlugin.isMarked(pluginJar.path)) {
+                                val protectedRoots =
+                                    classpathRoots(System.getProperty("java.class.path")) +
+                                        classpathRoots(classpath) +
+                                        listOf(
+                                            File(System.getProperty("java.home"))
+                                                .also {
+                                                    require(it.isAbsolute) { "java.home must be absolute" }
+                                                }.normalize(),
+                                            File(ProcessSpawner.findJavaExecutable())
+                                                .also {
+                                                    require(it.isAbsolute) {
+                                                        "Protected Java executable path must be absolute: ${it.path}"
+                                                    }
+                                                }.normalize(),
+                                        ) +
+                                        listOfNotNull(
+                                            manifest.nativeImagePath
+                                                ?.takeIf { it.isNotEmpty() }
+                                                ?.let(::File)
+                                                ?.takeIf { it.isFile && it.canExecute() },
+                                        )
+                                CageforgePolicyCeiling
+                                    .forWorkspace(workDir, protectedRoots)
+                                    .policyFor(workDir)
+                            } else {
+                                null
+                            },
                     )
 
                 logger.info(
@@ -300,11 +350,14 @@ class OutOfProcessPluginSpawnerImpl(
             }
         }
 
-    private fun buildEnvironment(jarPath: String): Map<String, String> =
+    private fun buildEnvironment(
+        jarPath: String,
+        workingDirectory: String,
+    ): Map<String, String> =
         buildMap {
             put("BOSS_PLUGIN_CLASSPATH", jarPath)
             if (windowId.isNotBlank()) put("BOSS_WINDOW_ID", windowId)
-            if (projectPath.isNotEmpty()) put("BOSS_PROJECT_PATH", projectPath)
+            put("BOSS_PROJECT_PATH", workingDirectory)
         }
 
     /**
@@ -391,6 +444,23 @@ internal fun pluginProcessId(
  * `KernelBootstrap.instance`, so the instance and its registry both exist before this class does.
  */
 private fun kernelRegistry(): ProcessRegistry? = KernelBootstrap.instance?.processRegistry
+
+private fun classpathRoots(classpath: String): List<File> {
+    val roots = mutableListOf<File>()
+    for (rawEntry in classpath.split(File.pathSeparator)) {
+        if (rawEntry.isBlank()) continue
+        val entry = File(rawEntry)
+        require(entry.isAbsolute) {
+            "Protected launch classpath entry must be absolute: ${entry.path}"
+        }
+        val normalizedEntry = entry.normalize()
+        require(normalizedEntry.exists()) {
+            "Protected launch classpath entry does not exist: ${normalizedEntry.path}"
+        }
+        roots += normalizedEntry
+    }
+    return roots
+}
 
 private fun awaitForcedExit(process: ai.rever.boss.process.ManagedProcess?) {
     // SIGKILL is asynchronous. Preserve a still-live handle after this bounded wait.
