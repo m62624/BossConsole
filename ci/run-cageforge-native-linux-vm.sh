@@ -150,7 +150,11 @@ start_guest() {
 
 stop_guest() {
     ssh_guest 'sudo poweroff' >/dev/null 2>&1 || true
-    for _ in {1..30}; do
+    # cloud-init may still be flushing package and filesystem state after the
+    # bootstrap marker is written. Give systemd enough time to power off cleanly
+    # before falling back to killing QEMU, otherwise the next boot can require
+    # an avoidable filesystem recovery.
+    for _ in {1..120}; do
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             wait "$qemu_pid" 2>/dev/null || true
             qemu_pid=
@@ -176,11 +180,11 @@ wait_for_ssh() {
 
 wait_for_bootstrap() {
     for _ in {1..180}; do
-        ssh_guest 'sudo test -f /var/lib/boss-cageforge-bootstrap-complete' >/dev/null 2>&1 && return
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
             ssh_guest 'sudo tail -n 160 /var/log/cloud-init-output.log || true' >&2 || true
             exit 70
         fi
+        ssh_guest 'sudo test -f /var/lib/boss-cageforge-bootstrap-complete' >/dev/null 2>&1 && return
         sleep 2
     done
     ssh_guest 'sudo tail -n 160 /var/log/cloud-init-output.log || true' >&2 || true
@@ -198,7 +202,7 @@ start_guest restricted
 wait_for_ssh
 wait_for_bootstrap
 set +e
-ssh_guest bash -s <<'EOF'
+ssh_guest timeout --kill-after=10s 180s bash -s <<'EOF'
 set -euo pipefail
 bundle_root="$HOME/boss-native-security-test-bundle"
 sudo mkdir -p /mnt/boss-test-bundle
