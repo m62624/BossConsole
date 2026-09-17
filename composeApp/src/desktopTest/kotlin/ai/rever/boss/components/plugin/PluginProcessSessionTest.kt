@@ -25,6 +25,23 @@ class PluginProcessSessionTest {
     }
 
     @Test
+    fun `registry reserves a plugin while native startup is in progress`() {
+        val registry = PluginSessionRegistry()
+
+        registry.requireAvailable("plugin")
+        try {
+            assertFailsWith<IllegalStateException> {
+                registry.requireAvailable("plugin")
+            }
+        } finally {
+            registry.releaseReservation("plugin")
+        }
+
+        registry.requireAvailable("plugin")
+        registry.releaseReservation("plugin")
+    }
+
+    @Test
     fun `late cleanup from an older generation cannot remove a replacement`() {
         val registry = PluginSessionRegistry()
         val firstProcess = TestProcess()
