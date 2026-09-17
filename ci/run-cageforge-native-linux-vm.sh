@@ -2,22 +2,25 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: run-cageforge-native-linux-vm.sh --image IMAGE --source-archive ARCHIVE" >&2
+    echo "Usage: run-cageforge-native-linux-vm.sh --image IMAGE --source-archive ARCHIVE --test-bundle BUNDLE" >&2
     exit 64
 }
 
 image=
 source_archive=
+test_bundle=
 while (($# > 0)); do
     case "$1" in
         --image) (($# >= 2)) || usage; image=$2; shift 2 ;;
         --source-archive) (($# >= 2)) || usage; source_archive=$2; shift 2 ;;
+        --test-bundle) (($# >= 2)) || usage; test_bundle=$2; shift 2 ;;
         *) usage ;;
     esac
 done
 
 [[ -f "$image" ]] || { echo "image is missing: $image" >&2; exit 66; }
 [[ -f "$source_archive" ]] || { echo "source archive is missing: $source_archive" >&2; exit 66; }
+[[ -f "$test_bundle" ]] || { echo "native test bundle is missing: $test_bundle" >&2; exit 66; }
 for command in genisoimage qemu-img qemu-system-x86_64 ssh ssh-keygen; do
     command -v "$command" >/dev/null || { echo "required command is missing: $command" >&2; exit 69; }
 done
@@ -32,6 +35,7 @@ ssh_key="$work_dir/guest_ed25519"
 overlay="$work_dir/guest-overlay.qcow2"
 seed_iso="$work_dir/seed.iso"
 source_iso="$work_dir/source.iso"
+test_bundle_iso="$work_dir/test-bundle.iso"
 serial_log="$work_dir/qemu-serial.log"
 stderr_log="$work_dir/qemu.stderr.log"
 
@@ -121,6 +125,8 @@ EOF
 qemu-img create -q -f qcow2 -F qcow2 -o size=16G -b "$image" "$overlay"
 genisoimage -quiet -output "$seed_iso" -volid CIDATA -joliet -rock "$work_dir/user-data" "$work_dir/meta-data"
 genisoimage -quiet -output "$source_iso" -volid BOSS_SOURCE -joliet -rock -graft-points "source_archive=$source_archive"
+genisoimage -quiet -output "$test_bundle_iso" -volid BOSS_TEST_BUNDLE -joliet -rock \
+    -graft-points "native-test-bundle.tar.gz=$test_bundle"
 
 ssh_guest() {
     ssh -q -i "$ssh_key" -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=2 \
@@ -138,6 +144,7 @@ start_guest() {
         -drive "if=virtio,format=qcow2,file=$overlay" \
         -drive "if=ide,media=cdrom,readonly=on,format=raw,file=$seed_iso" \
         -drive "if=ide,media=cdrom,readonly=on,format=raw,file=$source_iso" \
+        -drive "if=ide,media=cdrom,readonly=on,format=raw,file=$test_bundle_iso" \
         -netdev "$network_spec" -device virtio-net-pci,netdev=net0 \
         -display none -serial "file:$serial_log" >/dev/null 2>"$stderr_log" &
     qemu_pid=$!
@@ -182,22 +189,10 @@ wait_for_bootstrap() {
     exit 70
 }
 
-echo '[boss] preparing dependencies in unrestricted guest'
+echo '[boss] bootstrapping native guest in unrestricted mode'
 start_guest unrestricted
 wait_for_ssh
 wait_for_bootstrap
-ssh_guest bash -s <<'EOF'
-set -euo pipefail
-sudo mkdir -p /mnt/boss-source
-sudo mount -L BOSS_SOURCE -o ro /mnt/boss-source
-rm -rf "$HOME/BossConsole"
-mkdir -p "$HOME/BossConsole"
-tar --extract --file=/mnt/boss-source/source_archive --directory="$HOME/BossConsole" --no-same-owner
-cd "$HOME/BossConsole"
-export CAGEFORGE_SOURCE_ROOT="$HOME/BossConsole"
-bash ci/cageforge-qemu-suite/prepare.sh
-sudo umount /mnt/boss-source
-EOF
 stop_guest
 
 echo '[boss] running native security smoke in restricted guest'
@@ -207,9 +202,18 @@ wait_for_bootstrap
 set +e
 ssh_guest bash -s <<'EOF'
 set -euo pipefail
-cd "$HOME/BossConsole"
-export CAGEFORGE_SOURCE_ROOT="$HOME/BossConsole"
-bash ci/cageforge-qemu-suite/run.sh
+bundle_root="$HOME/boss-native-security-test-bundle"
+sudo mkdir -p /mnt/boss-test-bundle
+sudo mount -L BOSS_TEST_BUNDLE -o ro /mnt/boss-test-bundle
+rm -rf "$bundle_root"
+mkdir -p "$bundle_root"
+tar --extract \
+    --file=/mnt/boss-test-bundle/native-test-bundle.tar.gz \
+    --directory="$bundle_root" \
+    --no-same-owner
+java -cp "$bundle_root/classes:$bundle_root/lib/*" \
+    ai.rever.boss.process.CageforgeNativeSecurityTestMain
+sudo umount /mnt/boss-test-bundle
 EOF
 result=$?
 set -e

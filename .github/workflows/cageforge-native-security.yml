@@ -90,10 +90,24 @@ jobs:
           printf '%s  %s\n' "$CAGEFORGE_VM_IMAGE_SHA256" "$image" | sha256sum --check --status
           echo "CAGEFORGE_VM_IMAGE=$image" >> "$GITHUB_ENV"
 
+      # Compile only the native smoke consumer on the ordinary Linux runner.
+      # The guest must execute the exact compiled BOSS process code, but it
+      # should not repeat Gradle/Kotlin dependency resolution under QEMU.
+      - name: Build native security test bundle
+        run: |
+          ./gradlew \
+            :boss-process-manager:nativeSecurityTestBundle \
+            --no-daemon \
+            --max-workers=2 \
+            --console=plain
+
       - name: Archive the checked-out BOSS source
         run: |
           git archive --format=tar.gz \
             --output="$RUNNER_TEMP/BossConsole-source.tar.gz" HEAD
+          cp \
+            modules/boss-process-manager/build/nativeSecurityTest/boss-native-security-test-bundle.tar.gz \
+            "$RUNNER_TEMP/boss-native-security-test-bundle.tar.gz"
 
       - name: Run BOSS native security smoke in the guest
         env:
@@ -102,7 +116,8 @@ jobs:
         run: |
           ./ci/run-cageforge-native-linux-vm.sh \
             --image "$CAGEFORGE_VM_IMAGE" \
-            --source-archive "$RUNNER_TEMP/BossConsole-source.tar.gz"
+            --source-archive "$RUNNER_TEMP/BossConsole-source.tar.gz" \
+            --test-bundle "$RUNNER_TEMP/boss-native-security-test-bundle.tar.gz"
 
       - name: Upload QEMU and guest boot logs
         if: always()
