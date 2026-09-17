@@ -42,7 +42,11 @@ cleanup() {
     fi
     if [[ -n "$artifacts_dir" ]]; then
         mkdir -p "$artifacts_dir"
-        cp -a "$work_dir"/. "$artifacts_dir"/ 2>/dev/null || true
+        # Keep diagnostics, but never export the temporary SSH key, seed ISO, test bundle,
+        # or guest disk image. The artifact directory is uploaded by CI and must not contain
+        # credentials or a copy of the guest filesystem.
+        cp "$serial_log" "$artifacts_dir/qemu-serial.log" 2>/dev/null || true
+        cp "$stderr_log" "$artifacts_dir/qemu.stderr.log" 2>/dev/null || true
     fi
     rm -rf "$work_dir"
 }
@@ -115,7 +119,7 @@ write_files:
         'awk '\''/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { found++; if (\$2 != "0000000000000000") bad=1 } END { exit (found == 5 && bad == 0 ? 0 : 1) }'\'' /proc/self/status'
       touch /var/lib/boss-cageforge-bootstrap-complete
 runcmd:
-  - [bash, /etc/boss-cageforge-bootstrap.sh]
+  - [cloud-init-per, once, boss-cageforge-bootstrap, bash, /etc/boss-cageforge-bootstrap.sh]
 EOF
 
 qemu-img create -q -f qcow2 -F qcow2 -o size=16G -b "$image" "$overlay"
