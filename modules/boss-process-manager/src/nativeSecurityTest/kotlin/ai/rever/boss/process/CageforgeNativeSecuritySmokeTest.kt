@@ -28,14 +28,61 @@ class CageforgeNativeSecuritySmokeTest {
                 managed = ProcessSpawner("native-security-test", logs.toFile()).spawn(config)
                 assertSmokeResult(managed.process, workspace, outside, server)
             } finally {
-                managed?.destroyForcibly()
-                managed?.process?.onExit()?.join()
+                managed?.let { terminateAfterTest(it.process) }
             }
         } finally {
             server.close()
             logs.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
             outside.parent.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun nativeProcessKillDoesNotLeaveADescendant() {
+        val workspace = Files.createTempDirectory("boss-cageforge-kill-")
+        val logs = Files.createTempDirectory("boss-cageforge-kill-logs-")
+        val ready = workspace.resolve("kill-ready.txt")
+        val lateMarker = workspace.resolve("late-descendant-write.txt")
+        var managed: ManagedProcess? = null
+        try {
+            val classpath = System.getProperty("java.class.path")
+            val javaExecutable = ProcessSpawner.findJavaExecutable()
+            val readRoots =
+                classpathRoots(classpath) +
+                    listOf(File(System.getProperty("java.home")), File(javaExecutable))
+            val config =
+                ProcessConfig(
+                    processId = "native-security-kill",
+                    processType = ProcessType.APP,
+                    displayName = "Cageforge native kill smoke",
+                    mainClass = CageforgeNativeKillProbe::class.java.name,
+                    classpath = classpath,
+                    workDir = workspace.toFile(),
+                    environment =
+                        mapOf(
+                            "BOSS_SMOKE_JAVA" to javaExecutable,
+                            "BOSS_SMOKE_CLASSPATH" to classpath,
+                            "BOSS_SMOKE_KILL_READY" to ready.toString(),
+                            "BOSS_SMOKE_LATE_MARKER" to lateMarker.toString(),
+                        ),
+                    cageforge = CageforgeProcessPolicy.workspace(workspace.toFile(), readRoots),
+                )
+
+            managed = ProcessSpawner("native-security-kill", logs.toFile()).spawn(config)
+            awaitFile(ready)
+            managed.destroyForcibly()
+
+            assertTrue(managed.process.waitFor(10, TimeUnit.SECONDS), "parent process did not exit")
+            Thread.sleep(2_000)
+            assertTrue(
+                !Files.exists(lateMarker),
+                "Cageforge kill must terminate descendants before they perform late work",
+            )
+        } finally {
+            managed?.let { terminateAfterTest(it.process) }
+            logs.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
         }
     }
 
@@ -100,6 +147,22 @@ class CageforgeNativeSecuritySmokeTest {
             .split(File.pathSeparator)
             .filter { it.isNotBlank() }
             .map(::File)
+
+    private fun awaitFile(path: Path) {
+        repeat(200) {
+            if (Files.isRegularFile(path)) return
+            Thread.sleep(50)
+        }
+        assertTrue(Files.isRegularFile(path), "native kill probe did not become ready: $path")
+    }
+
+    private fun terminateAfterTest(process: Process) {
+        process.destroyForcibly()
+        assertTrue(
+            process.waitFor(10, TimeUnit.SECONDS),
+            "native smoke process did not terminate during cleanup",
+        )
+    }
 }
 
 /** Child JVM used only by the native smoke. */
@@ -144,5 +207,33 @@ object CageforgeNativeGrandchild {
         val marker = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_GRANDCHILD")))
         Files.writeString(marker, "created")
         println("grandchild-ready")
+    }
+}
+
+/** Parent used only by the native kill smoke. */
+object CageforgeNativeKillProbe {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        val javaExecutable = requireNotNull(System.getenv("BOSS_SMOKE_JAVA"))
+        val classpath = requireNotNull(System.getenv("BOSS_SMOKE_CLASSPATH"))
+        val lateMarker = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_LATE_MARKER")))
+        val ready = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_KILL_READY")))
+        ProcessBuilder(
+            javaExecutable,
+            "-cp",
+            classpath,
+            CageforgeNativeSleeper::class.java.name,
+            lateMarker.toString(),
+        ).inheritIO().start()
+        Files.writeString(ready, "ready")
+        Thread.sleep(Long.MAX_VALUE)
+    }
+}
+
+object CageforgeNativeSleeper {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        Thread.sleep(1_000)
+        Files.writeString(Path.of(args.single()), "late-descendant-write")
     }
 }
