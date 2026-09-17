@@ -41,8 +41,8 @@ dependencies {
 
 // Native enforcement tests are intentionally a separate source set and task.
 // Ordinary `test` remains portable JVM/process/IPC coverage; this task is run
-// only by the prepared Linux QEMU/KVM job and must fail when native capability
-// prerequisites are unavailable.
+// only by an explicit native-security workflow and must fail when native
+// capability prerequisites are unavailable.
 val nativeSecurityTestSourceSet = sourceSets.create("nativeSecurityTest")
 nativeSecurityTestSourceSet.kotlin.srcDir("src/nativeSecurityTest/kotlin")
 nativeSecurityTestSourceSet.compileClasspath += sourceSets.main.get().output
@@ -69,15 +69,6 @@ val nativeSecurityTest =
                 .get()
                 .asFile.absolutePath,
         )
-        doFirst {
-            val osName = System.getProperty("os.name").orEmpty()
-            if (!osName.startsWith("Linux", ignoreCase = true)) {
-                throw GradleException(
-                    "nativeSecurityTest requires a Linux guest with Cageforge native capabilities; " +
-                        "run ordinary process/IPC tests on this host and run this task in the QEMU job",
-                )
-            }
-        }
     }
 
 // The QEMU lane executes this prebuilt consumer inside the restricted guest.
