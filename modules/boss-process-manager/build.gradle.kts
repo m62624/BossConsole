@@ -1,4 +1,6 @@
 import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.bundling.Compression
+import org.gradle.api.tasks.bundling.Tar
 import java.nio.file.Files
 
 plugins {
@@ -33,7 +35,7 @@ dependencies {
     // Testing
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.junit.jupiter)
-    testRuntimeOnly(libs.junit.platform.launcher)
+    testImplementation(libs.junit.platform.launcher)
     testImplementation(libs.kotlinx.coroutines.test)
 }
 
@@ -75,6 +77,30 @@ val nativeSecurityTest =
                         "run ordinary process/IPC tests on this host and run this task in the QEMU job",
                 )
             }
+        }
+    }
+
+// The QEMU lane executes this prebuilt consumer inside the restricted guest.
+// Compilation and dependency resolution stay in the ordinary Linux job so the
+// guest proves native enforcement without repeating the full Gradle build.
+val nativeSecurityTestBundle =
+    tasks.register<Tar>("nativeSecurityTestBundle") {
+        group = "verification"
+        description = "Bundles the native security smoke consumer for the QEMU guest"
+        archiveFileName.set("boss-native-security-test-bundle.tar.gz")
+        destinationDirectory.set(layout.buildDirectory.dir("nativeSecurityTest"))
+        compression = Compression.GZIP
+        dependsOn(nativeSecurityTestSourceSet.classesTaskName)
+        from(sourceSets.main.get().output) {
+            into("classes")
+        }
+        from(nativeSecurityTestSourceSet.output) {
+            into("classes")
+        }
+        from({
+            nativeSecurityTestSourceSet.runtimeClasspath.files.filter(File::isFile)
+        }) {
+            into("lib")
         }
     }
 
