@@ -80,15 +80,36 @@ jobs:
           }
           sudo chmod 0666 /dev/kvm
 
-      - name: Download and verify the pinned Ubuntu guest image
+      - name: Restore the pinned Ubuntu guest image
+        id: guest-image-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/noble-server-cloudimg-amd64.img
+          key: boss-cageforge-ubuntu-noble-20260814-amd64-${{ env.CAGEFORGE_VM_IMAGE_SHA256 }}
+
+      - name: Download the pinned Ubuntu guest image
+        if: steps.guest-image-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
           curl --fail --silent --show-error --location --retry 3 \
             --max-filesize 1073741824 --max-time 900 \
             "$CAGEFORGE_VM_IMAGE_URL" --output "$image"
+
+      - name: Verify the pinned Ubuntu guest image
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
+          test -s "$image"
           printf '%s  %s\n' "$CAGEFORGE_VM_IMAGE_SHA256" "$image" | sha256sum --check --status
           echo "CAGEFORGE_VM_IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Cache the verified Ubuntu guest image
+        if: steps.guest-image-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/noble-server-cloudimg-amd64.img
+          key: boss-cageforge-ubuntu-noble-20260814-amd64-${{ env.CAGEFORGE_VM_IMAGE_SHA256 }}
 
       # Compile only the native smoke consumer on the ordinary Linux runner.
       # The guest must execute the exact compiled BOSS process code, but it
