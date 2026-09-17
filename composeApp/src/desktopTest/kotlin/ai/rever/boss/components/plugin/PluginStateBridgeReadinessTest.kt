@@ -15,34 +15,36 @@ import kotlin.test.assertFailsWith
 
 class PluginStateBridgeReadinessTest {
     @Test
-    fun `successful initial state RPC establishes readiness`() = runBlocking {
-        val server = startServer(rejectRequests = false)
-        val channel = channelFor(server)
-        val bridge = PluginStateBridge("plugin", "instance", channel)
-        try {
-            bridge.start()
-            bridge.awaitConnected(5_000)
-        } finally {
-            bridge.dispose()
-            shutdown(channel, server)
+    fun `successful initial state RPC establishes readiness`() =
+        runBlocking {
+            val server = startServer(rejectRequests = false)
+            val channel = channelFor(server)
+            val bridge = PluginStateBridge("plugin", "instance", channel)
+            try {
+                bridge.start()
+                bridge.awaitConnected(5_000)
+            } finally {
+                bridge.dispose()
+                shutdown(channel, server)
+            }
         }
-    }
 
     @Test
-    fun `authentication failure never establishes readiness`() = runBlocking {
-        val server = startServer(rejectRequests = true)
-        val channel = channelFor(server)
-        val bridge = PluginStateBridge("plugin", "instance", channel)
-        try {
-            bridge.start()
-            assertFailsWith<TimeoutCancellationException> {
-                bridge.awaitConnected(500)
+    fun `authentication failure never establishes readiness`() =
+        runBlocking {
+            val server = startServer(rejectRequests = true)
+            val channel = channelFor(server)
+            val bridge = PluginStateBridge("plugin", "instance", channel)
+            try {
+                bridge.start()
+                assertFailsWith<TimeoutCancellationException> {
+                    bridge.awaitConnected(500)
+                }
+            } finally {
+                bridge.dispose()
+                shutdown(channel, server)
             }
-        } finally {
-            bridge.dispose()
-            shutdown(channel, server)
         }
-    }
 
     private fun startServer(rejectRequests: Boolean): Server =
         ServerBuilder
