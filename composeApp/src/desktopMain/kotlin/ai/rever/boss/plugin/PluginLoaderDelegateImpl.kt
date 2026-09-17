@@ -46,6 +46,10 @@ import javax.swing.SwingUtilities
  *
  * This delegate is registered via context.registerPluginAPI() and allows
  * dynamic plugins (like plugin-manager) to interact with the plugin system.
+ *
+ * Lifecycle cancellation is control flow, not a recoverable plugin failure. This matters
+ * especially for protected plugins: a cancelled spawn or termination may already own a native
+ * child whose cleanup must remain visible to its caller instead of becoming `false`.
  */
 class PluginLoaderDelegateImpl(
     private val dynamicPluginManager: DynamicPluginManager,
