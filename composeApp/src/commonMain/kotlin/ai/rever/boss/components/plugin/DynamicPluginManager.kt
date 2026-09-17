@@ -960,14 +960,6 @@ class DynamicPluginManager(
                             return Result.failure(error)
                         }
                     if (securityRequirement == SecurityRequirement.REQUIRED) {
-                        val spawner =
-                            outOfProcessSpawner
-                                ?: return Result.failure(
-                                    IllegalStateException(
-                                        "Security-required plugin ${preflightManifest.pluginId} " +
-                                            "has no protected spawner",
-                                    ),
-                                )
                         securityRequiredPluginIds += preflightManifest.pluginId
                         if (!enabled) {
                             val info =
@@ -981,6 +973,14 @@ class DynamicPluginManager(
                             updatePluginState(preflightManifest.pluginId, info)
                             return Result.success(info)
                         }
+                        val spawner =
+                            outOfProcessSpawner
+                                ?: return Result.failure(
+                                    IllegalStateException(
+                                        "Security-required plugin ${preflightManifest.pluginId} " +
+                                            "has no protected spawner",
+                                    ),
+                                )
                         if (!canAccess(preflightManifest)) {
                             val info =
                                 DynamicPluginInfo(
@@ -1679,36 +1679,39 @@ class DynamicPluginManager(
         }
     }
 
-    private suspend fun uninstallSecurityRequiredPlugin(pluginId: String): Result<Unit> {
-        val manifest = getPluginInfo(pluginId)?.manifest
-        val spawner = outOfProcessSpawner
-        return when {
-            manifest == null -> {
-                Result.failure(
-                    IllegalStateException("Security-required plugin state missing: $pluginId"),
-                )
-            }
+    private suspend fun uninstallSecurityRequiredPlugin(pluginId: String): Result<Unit> =
+        mutex.withLock {
+            withContext(NonCancellable) {
+                val manifest = getPluginInfo(pluginId)?.manifest
+                val spawner = outOfProcessSpawner
+                when {
+                    manifest == null -> {
+                        Result.failure(
+                            IllegalStateException("Security-required plugin state missing: $pluginId"),
+                        )
+                    }
 
-            spawner == null -> {
-                Result.failure(
-                    IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
-                )
-            }
+                    spawner == null -> {
+                        Result.failure(
+                            IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
+                        )
+                    }
 
-            else -> {
-                val termination = spawner.terminate(pluginId)
-                if (termination.isFailure) {
-                    termination
-                } else {
-                    securityRequiredPluginIds.remove(pluginId)
-                    removePluginState(pluginId)
-                    notifyListeners { it.pluginUnloaded(manifest) }
-                    emitPluginLifecycle(pluginId, PluginLifecycleState.UNLOADED)
-                    Result.success(Unit)
+                    else -> {
+                        val termination = spawner.terminate(pluginId)
+                        if (termination.isFailure) {
+                            termination
+                        } else {
+                            securityRequiredPluginIds.remove(pluginId)
+                            removePluginState(pluginId)
+                            notifyListeners { it.pluginUnloaded(manifest) }
+                            emitPluginLifecycle(pluginId, PluginLifecycleState.UNLOADED)
+                            Result.success(Unit)
+                        }
+                    }
                 }
             }
         }
-    }
 
     /**
      * Enable a disabled plugin.
