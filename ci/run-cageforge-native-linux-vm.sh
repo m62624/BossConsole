@@ -150,11 +150,8 @@ start_guest() {
 
 stop_guest() {
     ssh_guest 'sudo poweroff' >/dev/null 2>&1 || true
-    # cloud-init may still be flushing package and filesystem state after the
-    # bootstrap marker is written. Give systemd enough time to power off cleanly
-    # before falling back to killing QEMU, otherwise the next boot can require
-    # an avoidable filesystem recovery.
-    for _ in {1..120}; do
+    # Give systemd a bounded grace period to flush the guest before force-killing QEMU.
+    for _ in {1..30}; do
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             wait "$qemu_pid" 2>/dev/null || true
             qemu_pid=
