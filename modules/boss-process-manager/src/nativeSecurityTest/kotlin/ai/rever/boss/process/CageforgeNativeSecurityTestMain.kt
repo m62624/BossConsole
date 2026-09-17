@@ -1,11 +1,11 @@
 package ai.rever.boss.process
 
-import java.io.PrintWriter
 import org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
 import org.junit.platform.launcher.LauncherDiscoveryRequest
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder
 import org.junit.platform.launcher.core.LauncherFactory
 import org.junit.platform.launcher.listeners.SummaryGeneratingListener
+import java.io.PrintWriter
 
 /** Runs the BOSS native smoke without requiring Gradle inside the restricted guest. */
 object CageforgeNativeSecurityTestMain {
@@ -14,7 +14,8 @@ object CageforgeNativeSecurityTestMain {
         require(args.isEmpty()) { "native security smoke does not accept arguments" }
 
         val request: LauncherDiscoveryRequest =
-            LauncherDiscoveryRequestBuilder.request()
+            LauncherDiscoveryRequestBuilder
+                .request()
                 .selectors(selectClass(CageforgeNativeSecuritySmokeTest::class.java))
                 .build()
         val listener = SummaryGeneratingListener()
