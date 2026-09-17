@@ -34,6 +34,8 @@ data class ProcessConfig(
     val startupTimeoutMs: Long = 30_000,
     /** Heartbeat interval in milliseconds */
     val heartbeatIntervalMs: Long = 5_000,
+    /** Immutable native Cageforge policy for security-required processes. */
+    val cageforge: CageforgeProcessPolicy? = null,
 )
 
 enum class ProcessType {
