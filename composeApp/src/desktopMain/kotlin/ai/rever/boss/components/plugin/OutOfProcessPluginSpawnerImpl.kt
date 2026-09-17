@@ -17,7 +17,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.security.MessageDigest
@@ -207,11 +206,7 @@ class OutOfProcessPluginSpawnerImpl(
                 process.destroy()
 
                 // Wait for graceful shutdown, then force kill
-                val exited =
-                    withTimeoutOrNull(5_000) {
-                        while (process.isAlive) delay(100)
-                        true
-                    } ?: false
+                val exited = process.process.waitFor(5, TimeUnit.SECONDS)
                 if (!exited) {
                     process.destroyForcibly()
                     logger.warn("Force-killed plugin process after shutdown timeout: id={}", pluginId)
