@@ -56,7 +56,8 @@ configurations[nativeSecurityTestSourceSet.runtimeOnlyConfigurationName]
 val nativeSecurityTest =
     tasks.register<Test>("nativeSecurityTest") {
         group = "verification"
-        description = "Runs Cageforge native enforcement smoke tests in a prepared Linux guest"
+        description =
+            "Runs Cageforge native enforcement smoke tests in a prepared native environment"
         dependsOn(nativeSecurityTestSourceSet.classesTaskName)
         testClassesDirs = nativeSecurityTestSourceSet.output.classesDirs
         classpath = nativeSecurityTestSourceSet.runtimeClasspath
