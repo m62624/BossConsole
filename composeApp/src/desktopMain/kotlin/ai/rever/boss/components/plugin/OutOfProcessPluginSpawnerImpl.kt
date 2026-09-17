@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.security.MessageDigest
@@ -59,10 +60,13 @@ class OutOfProcessPluginSpawnerImpl(
     ): Result<Unit> =
         withContext(Dispatchers.IO) {
             var session: PluginProcessSession? = null
+            var managedProcess: ManagedProcess? = null
+            var reservationHeld = false
             try {
                 val spawnGeneration = reapSpawnGate.generation()
                 val pluginId = manifest.pluginId
                 sessionRegistry.requireAvailable(pluginId)
+                reservationHeld = true
                 validateRuntime(runtimeClasspath)
                 val config =
                     buildProcessConfig(
@@ -75,8 +79,9 @@ class OutOfProcessPluginSpawnerImpl(
                             projectPath = projectPath,
                         ),
                     )
-                val managedProcess = spawnProcess(spawnGeneration, config)
-                val newSession = sessionRegistry.newSession(pluginId, config, managedProcess)
+                val spawnedProcess = spawnProcess(spawnGeneration, config)
+                managedProcess = spawnedProcess
+                val newSession = sessionRegistry.newSession(pluginId, config, spawnedProcess)
                 session = newSession
                 sessionRegistry.register(newSession)
                 waitForReady(pluginId, newSession, config.startupTimeoutMs)
@@ -88,6 +93,9 @@ class OutOfProcessPluginSpawnerImpl(
             } catch (e: ReapAdmissionException) {
                 logger.warn("Refusing plugin startup after a reap: {}", manifest.pluginId)
                 Result.failure(e)
+            } catch (e: CancellationException) {
+                cleanupFailedSpawn(session, managedProcess)
+                throw e
             } catch (e: Exception) {
                 logger.error(
                     "Failed to spawn out-of-process plugin: manifest={}",
@@ -97,8 +105,10 @@ class OutOfProcessPluginSpawnerImpl(
                 // A waitForReady timeout leaves a child that started but never registered -
                 // still alive, and no longer referenced by anything that would kill it. Reap
                 // it here rather than let a failed spawn become another orphan.
-                cleanupFailedSpawn(session)
+                cleanupFailedSpawn(session, managedProcess)
                 Result.failure(e)
+            } finally {
+                if (reservationHeld) sessionRegistry.releaseReservation(manifest.pluginId)
             }
         }
 
@@ -141,8 +151,14 @@ class OutOfProcessPluginSpawnerImpl(
     /**
      * Tear down everything [spawn] may have created for a plugin whose startup failed.
      */
-    private fun cleanupFailedSpawn(session: PluginProcessSession?) {
-        if (session == null) return
+    private fun cleanupFailedSpawn(
+        session: PluginProcessSession?,
+        managedProcess: ManagedProcess?,
+    ) {
+        if (session == null) {
+            cleanupUnregisteredProcess(managedProcess, kernelRegistry(), logger)
+            return
+        }
         val resources = session.beginTermination() ?: return
         val descendants =
             ai.rever.boss.kernel
@@ -280,6 +296,33 @@ class OutOfProcessPluginSpawnerImpl(
                 delay(100)
             }
         }
+    }
+}
+
+private fun cleanupUnregisteredProcess(
+    process: ManagedProcess?,
+    registry: ProcessRegistry?,
+    logger: Logger,
+) {
+    if (process == null) return
+    val descendants =
+        ai.rever.boss.kernel
+            .processDescendants(process.process)
+    runCatching { process.ipcClient?.shutdown(timeoutMs = 0) }
+    runCatching { process.destroyForcibly() }
+    ai.rever.boss.kernel
+        .killProcessDescendants(descendants)
+    val terminated =
+        !process.isAlive ||
+            runCatching { process.process.waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
+    if (terminated) {
+        registry?.unregisterIfSame(process.config.processId, process)
+    } else {
+        logger.error(
+            "Failed to confirm cleanup of unregistered protected plugin process: id={}, pid={}",
+            process.config.processId,
+            process.pid,
+        )
     }
 }
 
