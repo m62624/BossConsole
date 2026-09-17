@@ -5,10 +5,16 @@ on:
     branches: [main, develop, dev]
     paths:
       - 'modules/boss-process-manager/**'
+      - 'composeApp/build.gradle.kts'
       - 'composeApp/src/commonMain/kotlin/ai/rever/boss/components/plugin/DynamicPluginManager.kt'
       - 'composeApp/src/commonMain/kotlin/ai/rever/boss/components/plugin/SecurityRequiredPlugin.kt'
       - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/SecurityRequiredPlugin.kt'
       - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/OutOfProcessPluginSpawnerImpl.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/PluginProcessSession.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/PluginStateBridge.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/ProtectedPluginProcessConfig.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/plugin/PluginLoaderDelegateImpl.kt'
+      - 'composeApp/src/desktopTest/kotlin/ai/rever/boss/components/plugin/**'
       - 'gradle/libs.versions.toml'
       - 'ci/cageforge-qemu-suite/**'
       - 'ci/run-cageforge-native-linux-vm.sh'
@@ -17,10 +23,16 @@ on:
     branches: [main, dev]
     paths:
       - 'modules/boss-process-manager/**'
+      - 'composeApp/build.gradle.kts'
       - 'composeApp/src/commonMain/kotlin/ai/rever/boss/components/plugin/DynamicPluginManager.kt'
       - 'composeApp/src/commonMain/kotlin/ai/rever/boss/components/plugin/SecurityRequiredPlugin.kt'
       - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/SecurityRequiredPlugin.kt'
       - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/OutOfProcessPluginSpawnerImpl.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/PluginProcessSession.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/PluginStateBridge.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/ProtectedPluginProcessConfig.kt'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/plugin/PluginLoaderDelegateImpl.kt'
+      - 'composeApp/src/desktopTest/kotlin/ai/rever/boss/components/plugin/**'
       - 'gradle/libs.versions.toml'
       - 'ci/cageforge-qemu-suite/**'
       - 'ci/run-cageforge-native-linux-vm.sh'

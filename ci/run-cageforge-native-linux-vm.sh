@@ -99,12 +99,12 @@ write_files:
         shift 2
         echo "[boss] probing \$namespace namespace (\$flag)"
         timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
-          --die-with-parent --unshare-user "\$@" --ro-bind / / /bin/true
+          --die-with-parent --unshare-user "\$flag" "\$@" --ro-bind / / /bin/true
       }
       probe_bubblewrap_namespace user --unshare-user
-      probe_bubblewrap_namespace pid --unshare-pid --unshare-pid --as-pid-1
-      probe_bubblewrap_namespace ipc --unshare-ipc --unshare-ipc
-      probe_bubblewrap_namespace network --unshare-net --unshare-net
+      probe_bubblewrap_namespace pid --unshare-pid --as-pid-1
+      probe_bubblewrap_namespace ipc --unshare-ipc
+      probe_bubblewrap_namespace network --unshare-net
       echo '[boss] probing nested user namespace isolation'
       timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
         --die-with-parent --unshare-user --disable-userns --ro-bind / / /bin/true
