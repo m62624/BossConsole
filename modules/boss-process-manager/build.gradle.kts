@@ -1,6 +1,6 @@
-import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.bundling.Compression
 import org.gradle.api.tasks.bundling.Tar
+import org.gradle.api.tasks.testing.Test
 import java.nio.file.Files
 
 plugins {

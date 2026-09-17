@@ -22,7 +22,10 @@ internal object CageforgePlatformSetup {
 
         synchronized(windowsSetupLock) {
             when (WindowsSetup.status()) {
-                WindowsSetupState.READY -> WindowsSetup.verify()
+                WindowsSetupState.READY -> {
+                    WindowsSetup.verify()
+                }
+
                 WindowsSetupState.MISSING,
                 WindowsSetupState.STALE,
                 -> {
