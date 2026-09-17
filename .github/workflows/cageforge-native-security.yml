@@ -68,6 +68,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup JDK
+        uses: actions/setup-java@v6.0.0
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
       - name: Install QEMU tooling
         run: |
           sudo apt-get update
