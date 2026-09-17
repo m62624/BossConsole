@@ -1681,27 +1681,31 @@ class DynamicPluginManager(
 
     private suspend fun uninstallSecurityRequiredPlugin(pluginId: String): Result<Unit> =
         mutex.withLock {
-            withContext(NonCancellable) {
-                val manifest = getPluginInfo(pluginId)?.manifest
-                val spawner = outOfProcessSpawner
-                when {
-                    manifest == null -> {
-                        Result.failure(
-                            IllegalStateException("Security-required plugin state missing: $pluginId"),
-                        )
-                    }
+            val manifest = getPluginInfo(pluginId)?.manifest
+            val spawner = outOfProcessSpawner
+            when {
+                manifest == null -> {
+                    Result.failure(
+                        IllegalStateException("Security-required plugin state missing: $pluginId"),
+                    )
+                }
 
-                    spawner == null -> {
-                        Result.failure(
-                            IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
-                        )
-                    }
+                spawner == null -> {
+                    Result.failure(
+                        IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
+                    )
+                }
 
-                    else -> {
-                        val termination = spawner.terminate(pluginId)
-                        if (termination.isFailure) {
-                            termination
-                        } else {
+                else -> {
+                    // The spawner owns native termination and must receive cancellation so its
+                    // own cleanup path can run. Only state retirement is non-cancellable: once
+                    // termination has succeeded, the manager must not leave stale ownership
+                    // behind if the caller is cancelled during notification.
+                    val termination = spawner.terminate(pluginId)
+                    if (termination.isFailure) {
+                        termination
+                    } else {
+                        withContext(NonCancellable) {
                             securityRequiredPluginIds.remove(pluginId)
                             removePluginState(pluginId)
                             notifyListeners { it.pluginUnloaded(manifest) }
