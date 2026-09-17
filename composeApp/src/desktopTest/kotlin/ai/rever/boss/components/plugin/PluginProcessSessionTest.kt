@@ -3,6 +3,7 @@ package ai.rever.boss.components.plugin
 import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
 import ai.rever.boss.process.ProcessType
+import io.grpc.ManagedChannelBuilder
 import java.io.InputStream
 import java.io.OutputStream
 import kotlin.test.Test
@@ -74,6 +75,26 @@ class PluginProcessSessionTest {
             session.markTerminated()
         }
         assertEquals(PluginProcessSessionState.STOPPING, session.state)
+    }
+
+    @Test
+    fun `startup resources are owned before authenticated readiness`() {
+        val channel = ManagedChannelBuilder.forAddress("127.0.0.1", 1).usePlaintext().build()
+        val bridge = PluginStateBridge("plugin", "instance", channel)
+        val session = PluginSessionRegistry().newSession("plugin", config("plugin"), managedProcess("plugin"))
+
+        try {
+            session.markNativeSpawned()
+            session.attachResources(channel, bridge)
+
+            val resources = session.beginTermination()
+
+            assertSame(channel, resources?.channel)
+            assertSame(bridge, resources?.bridge)
+        } finally {
+            bridge.dispose()
+            channel.shutdownNow()
+        }
     }
 
     private fun config(id: String) =
