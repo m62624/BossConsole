@@ -102,6 +102,9 @@ val nativeSecurityTestBundle =
         }) {
             into("lib")
         }
+        from(rootProject.file("ci/cageforge-qemu-suite/run.sh")) {
+            into("ci/cageforge-qemu-suite")
+        }
     }
 
 tasks.withType<Test>().configureEach {

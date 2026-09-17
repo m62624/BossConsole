@@ -2,19 +2,10 @@
 
 set -euo pipefail
 
-cd "$CAGEFORGE_SOURCE_ROOT"
+bundle_root=${CAGEFORGE_NATIVE_TEST_BUNDLE_ROOT:?native security test bundle is required}
 
-# This task is deliberately separate from the ordinary three-OS test matrix.
-# The Gradle task itself fails on non-Linux and never silently skips native
-# capability failures.
-# Keep the restricted guest invocation bounded by the same resource contract as
-# preparation; otherwise a later test change could make the native lane fail
-# before Cageforge is exercised.
-./gradlew \
-    :boss-process-manager:nativeSecurityTest \
-    --offline \
-    --max-workers=1 \
-    --no-daemon \
-    --console=plain \
-    -Dorg.gradle.jvmargs='-Xmx1024M -Dfile.encoding=UTF-8' \
-    -Pkotlin.daemon.jvmargs=-Xmx768M
+# The ordinary Linux job compiles this exact consumer. The restricted guest
+# executes only the bundled smoke so native enforcement is tested without
+# repeating Gradle dependency resolution inside QEMU.
+java -cp "$bundle_root/classes:$bundle_root/lib/*" \
+    ai.rever.boss.process.CageforgeNativeSecurityTestMain
