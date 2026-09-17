@@ -1,6 +1,7 @@
 package ai.rever.boss.components.plugin
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -11,24 +12,41 @@ import java.util.jar.JarFile
 internal actual object SecurityRequiredPlugin {
     private val json = Json { ignoreUnknownKeys = true }
 
-    /**
-     * Reads the marker without loading any plugin class. A missing marker means ordinary plugin
-     * behavior; malformed or unreadable plugin artifacts are rejected by the normal manifest
-     * validation path before they can be launched.
-     */
-    actual fun isMarked(jarPath: String): Boolean =
+    /** Reads the marker without loading any plugin class. */
+    actual fun readRequirement(jarPath: String): Result<SecurityRequirement> =
         runCatching {
             JarFile(File(jarPath)).use { jar ->
-                val entry = jar.getJarEntry("META-INF/boss-plugin/plugin.json") ?: return@use false
+                val entry =
+                    jar.getJarEntry("META-INF/boss-plugin/plugin.json")
+                        ?: return@use SecurityRequirement.OPTIONAL
                 val root =
                     jar.getInputStream(entry).bufferedReader().use { json.parseToJsonElement(it.readText()) }
                 val objectRoot = root.jsonObject
-                objectRoot["securityRequired"]?.jsonPrimitive?.booleanOrNull == true ||
-                    objectRoot["security"]
-                        ?.jsonObject
-                        ?.get("required")
-                        ?.jsonPrimitive
-                        ?.booleanOrNull == true
+                val topLevel = readBoolean(objectRoot, "securityRequired")
+                val nested =
+                    objectRoot["security"]?.let { security ->
+                        require(security is JsonObject) { "Plugin security marker must be an object" }
+                        readBoolean(security, "required")
+                    }
+                require(topLevel == null || nested == null || topLevel == nested) {
+                    "Plugin security markers disagree"
+                }
+                when {
+                    topLevel == true || nested == true -> SecurityRequirement.REQUIRED
+                    else -> SecurityRequirement.OPTIONAL
+                }
             }
-        }.getOrDefault(false)
+        }
+
+    private fun readBoolean(
+        root: JsonObject,
+        name: String,
+    ): Boolean? {
+        val value = root[name] ?: return null
+        val primitive = value.jsonPrimitive
+        require(!primitive.isString && primitive.booleanOrNull != null) {
+            "Plugin security marker '$name' must be a boolean"
+        }
+        return primitive.booleanOrNull
+    }
 }
