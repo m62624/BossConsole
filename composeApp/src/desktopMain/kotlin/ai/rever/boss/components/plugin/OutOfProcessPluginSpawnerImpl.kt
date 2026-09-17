@@ -68,12 +68,19 @@ class OutOfProcessPluginSpawnerImpl(
                 sessionRegistry.requireAvailable(pluginId)
                 reservationHeld = true
                 validateRuntime(runtimeClasspath)
+                val effectiveSecurityRequired =
+                    SecurityRequiredPlugin.readRequirement(jarPath).getOrThrow() == SecurityRequirement.REQUIRED
+                if (effectiveSecurityRequired && !securityRequired) {
+                    error(
+                        "Security-required plugin $pluginId must be launched through the protected spawner",
+                    )
+                }
                 val config =
                     buildProcessConfig(
                         ProtectedPluginProcessConfig(
                             manifest = manifest,
                             jarPath = jarPath,
-                            securityRequired = securityRequired,
+                            securityRequired = effectiveSecurityRequired,
                             runtimeClasspath = runtimeClasspath,
                             windowId = windowId,
                             projectPath = projectPath,
