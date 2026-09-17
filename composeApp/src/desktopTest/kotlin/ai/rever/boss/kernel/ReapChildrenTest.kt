@@ -1,10 +1,13 @@
 package ai.rever.boss.kernel
 
+import ai.rever.boss.components.plugin.OutOfProcessPluginSpawnerImpl
+import ai.rever.boss.components.plugin.PluginSessionRegistry
 import ai.rever.boss.ipc.auth.ProcessTokenRegistry
 import ai.rever.boss.process.ManagedProcess
 import ai.rever.boss.process.ProcessConfig
 import ai.rever.boss.process.ProcessMonitor
 import ai.rever.boss.process.ProcessRegistry
+import ai.rever.boss.process.ProcessSpawner
 import ai.rever.boss.process.ProcessType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -405,15 +408,15 @@ class ReapChildrenTest {
                     delayedForce = true,
                 )
             val spawner =
-                ai.rever.boss.components.plugin.OutOfProcessPluginSpawnerImpl(
-                    ai.rever.boss.process
-                        .ProcessSpawner("unused"),
+                OutOfProcessPluginSpawnerImpl(
+                    ProcessSpawner("unused"),
                 )
-            val field = spawner.javaClass.getDeclaredField("managedProcesses").apply { isAccessible = true }
-
-            @Suppress("UNCHECKED_CAST")
-            val managedMap = field.get(spawner) as MutableMap<String, ManagedProcess>
-            managedMap["cancel-test"] = managed("cancel-test", process)
+            val managedProcess = managed("cancel-test", process)
+            val field = spawner.javaClass.getDeclaredField("sessionRegistry").apply { isAccessible = true }
+            val sessionRegistry = field.get(spawner) as PluginSessionRegistry
+            sessionRegistry.register(
+                sessionRegistry.newSession("cancel-test", managedProcess.config, managedProcess),
+            )
             val outcome =
                 java.util.concurrent.atomic
                     .AtomicReference<Result<Unit>?>(null)

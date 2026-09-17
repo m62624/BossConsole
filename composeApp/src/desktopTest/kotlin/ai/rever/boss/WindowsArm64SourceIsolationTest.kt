@@ -42,7 +42,9 @@ class WindowsArm64SourceIsolationTest {
             "/kernel/",
             "/plugin/remote/",
             "/plugin/OutOfProcessPluginSpawnerImpl.kt",
+            "/plugin/PluginProcessSession.kt",
             "/plugin/PluginStateBridge.kt",
+            "/plugin/ProtectedPluginProcessConfig.kt",
         )
 
     /** The `desktopTest` mirror: the two directories, plus tests naming boss-ipc types. */
@@ -54,6 +56,8 @@ class WindowsArm64SourceIsolationTest {
             "/plugin/PluginStoreSetupIpcGateTest.kt",
             "/plugin/PluginStateDeltaTest.kt",
             "/plugin/PluginProcessIdTest.kt",
+            "/plugin/PluginProcessSessionTest.kt",
+            "/plugin/PluginStateBridgeReadinessTest.kt",
             "/run/DesktopRunnerTerminalServiceTest.kt",
         )
 
