@@ -95,6 +95,80 @@ class PluginSandboxUnloadAwaitTest {
             }
         }
 
+    @Test
+    fun `cancellation during protected termination propagates to the caller`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            val terminationStarted = CompletableDeferred<Unit>()
+            val terminationReleased = CompletableDeferred<Unit>()
+            val spawner =
+                object : OutOfProcessPluginSpawner {
+                    override suspend fun spawn(
+                        manifest: PluginManifest,
+                        jarPath: String,
+                        securityRequired: Boolean,
+                    ): Result<Unit> = Result.success(Unit)
+
+                    override suspend fun terminate(pluginId: String): Result<Unit> {
+                        terminationStarted.complete(Unit)
+                        terminationReleased.await()
+                        return Result.success(Unit)
+                    }
+                }
+            val manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("No plugin is loaded in this fixture") },
+                    outOfProcessSpawner = spawner,
+                )
+            val id = "com.example.security-required"
+            val info =
+                DynamicPluginInfo(
+                    manifest =
+                        PluginManifest(
+                            pluginId = id,
+                            displayName = "Protected plugin",
+                            version = "1.0.0",
+                            apiVersion = "1.0",
+                            mainClass = "example.Plugin",
+                            type = PluginType.PANEL,
+                        ),
+                    jarPath = "/unused.jar",
+                    state = PluginState.LOADED,
+                    loadedAt = 0L,
+                    enabled = true,
+                )
+            manager.javaClass
+                .getDeclaredMethod("updatePluginState", String::class.java, DynamicPluginInfo::class.java)
+                .apply {
+                    isAccessible = true
+                    invoke(manager, id, info)
+                }
+            manager.javaClass
+                .getDeclaredField("securityRequiredPluginIds")
+                .apply { isAccessible = true }
+                .let { field ->
+                    val ids = checkNotNull(field.get(manager))
+                    ids.javaClass.getMethod("add", Any::class.java).invoke(ids, id)
+                }
+
+            val uninstall = async(start = CoroutineStart.UNDISPATCHED) { manager.uninstallPlugin(id, force = true) }
+            try {
+                withTimeout(5_000) { terminationStarted.await() }
+                uninstall.cancel()
+                withTimeout(5_000) { uninstall.join() }
+                assertTrue(uninstall.isCancelled)
+            } finally {
+                terminationReleased.complete(Unit)
+                uninstall.cancel()
+                withTimeout(5_000) { uninstall.join() }
+                manager.disposeWindow()
+                sandboxManager.dispose()
+            }
+        }
+
     private fun verifyRemoval(cancelCaller: Boolean) =
         runBlocking {
             val real = PluginSandboxManagerImpl()

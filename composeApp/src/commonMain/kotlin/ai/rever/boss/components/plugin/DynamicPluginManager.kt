@@ -1488,22 +1488,7 @@ class DynamicPluginManager(
         // child first, then retire the manager state. Calling pluginLoader here
         // would incorrectly manufacture an in-process ownership path.
         if (securityRequiredPluginIds.contains(pluginId)) {
-            return runCatching {
-                val manifest =
-                    getPluginInfo(pluginId)?.manifest
-                        ?: error("Security-required plugin state missing: $pluginId")
-                outOfProcessSpawner
-                    ?.terminate(pluginId)
-                    ?.getOrThrow()
-                    ?: error("Security-required plugin $pluginId has no protected spawner")
-                securityRequiredPluginIds.remove(pluginId)
-                removePluginState(pluginId)
-                notifyListeners { it.pluginUnloaded(manifest) }
-                emitPluginLifecycle(pluginId, PluginLifecycleState.UNLOADED)
-            }.fold(
-                onSuccess = { Result.success(Unit) },
-                onFailure = { Result.failure(it) },
-            )
+            return uninstallSecurityRequiredPlugin(pluginId)
         }
 
         // Close this plugin's open tabs on the UI thread FIRST, while its
@@ -1680,6 +1665,37 @@ class DynamicPluginManager(
                         e,
                     )
                     Result.failure(e)
+                }
+            }
+        }
+    }
+
+    private suspend fun uninstallSecurityRequiredPlugin(pluginId: String): Result<Unit> {
+        val manifest = getPluginInfo(pluginId)?.manifest
+        val spawner = outOfProcessSpawner
+        return when {
+            manifest == null -> {
+                Result.failure(
+                    IllegalStateException("Security-required plugin state missing: $pluginId"),
+                )
+            }
+
+            spawner == null -> {
+                Result.failure(
+                    IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
+                )
+            }
+
+            else -> {
+                val termination = spawner.terminate(pluginId)
+                if (termination.isFailure) {
+                    termination
+                } else {
+                    securityRequiredPluginIds.remove(pluginId)
+                    removePluginState(pluginId)
+                    notifyListeners { it.pluginUnloaded(manifest) }
+                    emitPluginLifecycle(pluginId, PluginLifecycleState.UNLOADED)
+                    Result.success(Unit)
                 }
             }
         }
