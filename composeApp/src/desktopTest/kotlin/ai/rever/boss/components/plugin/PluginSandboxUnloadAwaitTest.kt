@@ -334,6 +334,55 @@ class PluginSandboxUnloadAwaitTest {
             sandboxManager.dispose()
         }
 
+    @Test
+    fun `protected uninstall terminates before removing ownership state`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            var terminationCount = 0
+            var stateWasOwnedDuringTermination = false
+            lateinit var manager: DynamicPluginManager
+            val spawner =
+                object : OutOfProcessPluginSpawner {
+                    override suspend fun spawn(
+                        manifest: PluginManifest,
+                        jarPath: String,
+                        securityRequired: Boolean,
+                    ): Result<Unit> = Result.success(Unit)
+
+                    override suspend fun terminate(pluginId: String): Result<Unit> {
+                        terminationCount++
+                        stateWasOwnedDuringTermination = manager.getPluginInfo(pluginId) != null
+                        return Result.success(Unit)
+                    }
+                }
+            manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("Protected plugins must not create a host context") },
+                    outOfProcessSpawner = spawner,
+                )
+            withTempDir { tempDir ->
+                val jar =
+                    PluginJarTestFixtures.writeJar(
+                        tempDir,
+                        "security-required-plugin.jar",
+                        "com.example.security-required",
+                        "1.0.0",
+                        securityRequired = true,
+                    )
+                val installed = manager.installPlugin(jar.absolutePath).getOrThrow()
+
+                assertTrue(manager.uninstallPlugin(installed.manifest.pluginId, force = true).isSuccess)
+                assertTrue(stateWasOwnedDuringTermination)
+                assertTrue(terminationCount == 1)
+                assertFalse(manager.getPluginInfo(installed.manifest.pluginId) != null)
+            }
+            manager.disposeWindow()
+            sandboxManager.dispose()
+        }
+
     private fun verifyRemoval(cancelCaller: Boolean) =
         runBlocking {
             val real = PluginSandboxManagerImpl()
