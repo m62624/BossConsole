@@ -200,6 +200,8 @@ class PluginStateBridge(
                     }
                 } catch (e: StatePatchException) {
                     resyncAfterDeltaFailure(e.message ?: "Invalid state patch")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     resyncAfterDeltaFailure(e.javaClass.simpleName)
                 }
