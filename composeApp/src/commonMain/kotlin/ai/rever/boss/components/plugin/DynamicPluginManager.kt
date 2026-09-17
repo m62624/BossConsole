@@ -33,6 +33,7 @@ import ai.rever.boss.services.auth.AuthStateManager
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -2407,6 +2408,8 @@ class DynamicPluginManager(
                         ),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logger.error(
                     LogCategory.SYSTEM,
@@ -2515,6 +2518,8 @@ class DynamicPluginManager(
                         ),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logger.error(
                     LogCategory.SYSTEM,
