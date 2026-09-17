@@ -6,13 +6,16 @@ import ai.cageforge.SandboxProcess
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Bridges Cageforge's process handle to the existing BOSS process registry.
  *
- * The adapter implements the required process streams and lifecycle operations. The default
- * [Process] implementations provide timeout polling, forced termination and liveness checks in
- * terms of the primitives below, so we do not duplicate that logic here.
+ * The adapter implements the required process streams and lifecycle operations. Timed waits use
+ * Cageforge's completion future directly; forced termination and liveness checks remain expressed
+ * through the standard [Process] contract.
  */
 internal class CageforgeManagedProcess(
     private val sandbox: SandboxProcess,
@@ -46,27 +49,53 @@ internal class CageforgeManagedProcess(
 
     override fun waitFor(): Int {
         completedExitCode?.let { return it }
-        return waitForNativeProcess()
-    }
-
-    private fun waitForNativeProcess(): Int =
-        runCatching {
+        return runCatching {
             resultToExitCode(sandbox.waitFor()).also { completedExitCode = it }
         }.getOrElse { error ->
             completion.join()
             completedExitCode ?: throw error
         }
+    }
+
+    override fun waitFor(
+        timeout: Long,
+        unit: TimeUnit,
+    ): Boolean {
+        require(timeout >= 0) { "timeout must not be negative" }
+        return runCatching { completion.get(timeout, unit) }.fold(
+            onSuccess = { true },
+            onFailure = { error ->
+                when (error) {
+                    is TimeoutException -> {
+                        false
+                    }
+
+                    is ExecutionException -> {
+                        throw IllegalStateException(
+                            "Cageforge process wait failed",
+                            error.cause,
+                        )
+                    }
+
+                    is InterruptedException -> {
+                        Thread.currentThread().interrupt()
+                        throw error
+                    }
+
+                    else -> {
+                        throw error
+                    }
+                }
+            },
+        )
+    }
 
     override fun exitValue(): Int =
-        tryWaitForExit()
+        completedExitCode
+            ?: runCatching { sandbox.tryWait()?.let(::resultToExitCode) }
+                .getOrNull()
+                ?.also { completedExitCode = it }
             ?: throw IllegalThreadStateException("Cageforge process is still running")
-
-    private fun tryWaitForExit(): Int? {
-        completedExitCode?.let { return it }
-        val exitCode = runCatching { sandbox.tryWait()?.let(::resultToExitCode) }.getOrNull()
-        if (exitCode != null) completedExitCode = exitCode
-        return exitCode
-    }
 
     override fun destroy() {
         if (!completion.isDone) runCatching { sandbox.kill() }
