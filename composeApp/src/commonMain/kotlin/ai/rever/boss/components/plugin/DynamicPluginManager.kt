@@ -91,6 +91,7 @@ interface OutOfProcessPluginSpawner {
     suspend fun spawn(
         manifest: PluginManifest,
         jarPath: String,
+        securityRequired: Boolean = false,
     ): Result<Unit>
 
     /**
@@ -943,7 +944,17 @@ class DynamicPluginManager(
                             .getOrElse { error ->
                                 return Result.failure(error)
                             }
-                    if (SecurityRequiredPlugin.isMarked(jarPath)) {
+                    val securityRequirement =
+                        SecurityRequiredPlugin.readRequirement(jarPath).getOrElse { error ->
+                            logger.error(
+                                LogCategory.SYSTEM,
+                                "Security marker preflight failed; refusing plugin load",
+                                mapOf("jarPath" to jarPath),
+                                error,
+                            )
+                            return Result.failure(error)
+                        }
+                    if (securityRequirement == SecurityRequirement.REQUIRED) {
                         val spawner =
                             outOfProcessSpawner
                                 ?: return Result.failure(
@@ -977,7 +988,7 @@ class DynamicPluginManager(
                             updatePluginState(preflightManifest.pluginId, info)
                             return Result.success(info)
                         }
-                        spawner.spawn(preflightManifest, jarPath).getOrElse { error ->
+                        spawner.spawn(preflightManifest, jarPath, securityRequired = true).getOrElse { error ->
                             return Result.failure(error)
                         }
                         securityRequiredPluginIds += preflightManifest.pluginId
