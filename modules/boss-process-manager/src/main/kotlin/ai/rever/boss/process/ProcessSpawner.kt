@@ -141,6 +141,7 @@ class ProcessSpawner
             val policy = checkNotNull(config.cageforge)
             val workDir = validateProtectedWorkDir(config)
             validateProtectedExecutable(command)
+            CageforgePlatformSetup.ensureReady()
             val runtimeContext = RuntimeContext(currentDirectory = workDir.toPath())
             Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
             val runtime =
