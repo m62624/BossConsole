@@ -91,6 +91,20 @@ internal class PluginProcessSession(
             state = PluginProcessSessionState.NATIVE_SPAWNED
         }
 
+    fun attachResources(
+        channel: ManagedChannel,
+        bridge: PluginStateBridge,
+    ) = lock.withLock {
+        check(state == PluginProcessSessionState.NATIVE_SPAWNED) {
+            "Plugin session $sessionId cannot attach resources from $state"
+        }
+        check(this.channel == null && this.bridge == null) {
+            "Plugin session $sessionId already owns bridge resources"
+        }
+        this.channel = channel
+        this.bridge = bridge
+    }
+
     fun markMcpReady(
         channel: ManagedChannel,
         bridge: PluginStateBridge,
@@ -98,8 +112,9 @@ internal class PluginProcessSession(
         check(state == PluginProcessSessionState.NATIVE_SPAWNED) {
             "Plugin session $sessionId cannot become MCP_READY from $state"
         }
-        this.channel = channel
-        this.bridge = bridge
+        check(this.channel === channel && this.bridge === bridge) {
+            "Plugin session $sessionId readiness resources do not match its owner"
+        }
         state = PluginProcessSessionState.MCP_READY
     }
 
