@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -220,6 +221,117 @@ class PluginSandboxUnloadAwaitTest {
                     sandboxManager.dispose()
                 }
             }
+        }
+
+    @Test
+    fun `protected enable and disable use the process spawner`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            var spawnCount = 0
+            var terminationCount = 0
+            var protectedSpawn = false
+            val spawner =
+                object : OutOfProcessPluginSpawner {
+                    override suspend fun spawn(
+                        manifest: PluginManifest,
+                        jarPath: String,
+                        securityRequired: Boolean,
+                    ): Result<Unit> {
+                        spawnCount++
+                        protectedSpawn = securityRequired
+                        return Result.success(Unit)
+                    }
+
+                    override suspend fun terminate(pluginId: String): Result<Unit> {
+                        terminationCount++
+                        return Result.success(Unit)
+                    }
+                }
+            val manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("Protected plugins must not create a host context") },
+                    outOfProcessSpawner = spawner,
+                )
+            withTempDir { tempDir ->
+                val jar =
+                    PluginJarTestFixtures.writeJar(
+                        tempDir,
+                        "security-required-plugin.jar",
+                        "com.example.security-required",
+                        "1.0.0",
+                        securityRequired = true,
+                    )
+
+                val installed = manager.installPlugin(jar.absolutePath, enabled = false).getOrThrow()
+                assertFalse(installed.enabled)
+                assertFalse(installed.state == PluginState.LOADED)
+                assertTrue(spawnCount == 0, "Disabled protected install must not spawn a child")
+
+                assertTrue(manager.enablePlugin(installed.manifest.pluginId).isSuccess)
+                assertTrue(protectedSpawn)
+                assertTrue(spawnCount == 1)
+                assertTrue(manager.getPluginInfo(installed.manifest.pluginId)?.state == PluginState.LOADED)
+
+                assertTrue(manager.disablePlugin(installed.manifest.pluginId).isSuccess)
+                assertTrue(terminationCount == 1)
+                assertTrue(manager.getPluginInfo(installed.manifest.pluginId)?.state == PluginState.DISABLED)
+                assertTrue(File(jar.absolutePath).isFile)
+            }
+            manager.disposeWindow()
+            sandboxManager.dispose()
+        }
+
+    @Test
+    fun `protected disable preserves ownership when termination fails`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            var failTermination = true
+            val spawner =
+                object : OutOfProcessPluginSpawner {
+                    override suspend fun spawn(
+                        manifest: PluginManifest,
+                        jarPath: String,
+                        securityRequired: Boolean,
+                    ): Result<Unit> = Result.success(Unit)
+
+                    override suspend fun terminate(pluginId: String): Result<Unit> =
+                        if (failTermination) {
+                            Result.failure(IllegalStateException("termination refused"))
+                        } else {
+                            Result.success(Unit)
+                        }
+                }
+            val manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("Protected plugins must not create a host context") },
+                    outOfProcessSpawner = spawner,
+                )
+            withTempDir { tempDir ->
+                val jar =
+                    PluginJarTestFixtures.writeJar(
+                        tempDir,
+                        "security-required-plugin.jar",
+                        "com.example.security-required",
+                        "1.0.0",
+                        securityRequired = true,
+                    )
+                val installed = manager.installPlugin(jar.absolutePath).getOrThrow()
+                val failedDisable = manager.disablePlugin(installed.manifest.pluginId)
+                assertTrue(failedDisable.isFailure)
+                assertTrue(manager.getPluginInfo(installed.manifest.pluginId)?.state == PluginState.LOADED)
+                assertTrue(manager.getPluginInfo(installed.manifest.pluginId)?.enabled == true)
+
+                failTermination = false
+                assertTrue(manager.disablePlugin(installed.manifest.pluginId).isSuccess)
+            }
+            manager.disposeWindow()
+            sandboxManager.dispose()
         }
 
     private fun verifyRemoval(cancelCaller: Boolean) =

@@ -123,6 +123,11 @@ class DynamicPluginManager(
     private val createSandboxedContext: (pluginId: String, config: SandboxConfig) -> PluginContext,
     private val outOfProcessSpawner: OutOfProcessPluginSpawner? = null,
 ) {
+    private data class EnableOutcome(
+        val result: Result<Unit>,
+        val wasAlreadyEnabled: Boolean,
+    )
+
     private val logger = BossLogger.forComponent("DynamicPluginManager")
 
     /**
@@ -963,6 +968,7 @@ class DynamicPluginManager(
                                             "has no protected spawner",
                                     ),
                                 )
+                        securityRequiredPluginIds += preflightManifest.pluginId
                         if (!enabled) {
                             val info =
                                 DynamicPluginInfo(
@@ -991,7 +997,6 @@ class DynamicPluginManager(
                         spawner.spawn(preflightManifest, jarPath, securityRequired = true).getOrElse { error ->
                             return Result.failure(error)
                         }
-                        securityRequiredPluginIds += preflightManifest.pluginId
                         val info =
                             DynamicPluginInfo(
                                 manifest = preflightManifest,
@@ -1720,54 +1725,30 @@ class DynamicPluginManager(
         reportMissingDependencies: Boolean = true,
     ): Result<Unit> {
         var wasAlreadyEnabled = false
+        val isSecurityRequired = securityRequiredPluginIds.contains(pluginId)
         val result =
             mutex.withLock {
                 try {
-                    val loadedPlugin =
-                        pluginLoader.getPlugin(pluginId)
-                            ?: return@withLock Result.failure(Exception("Plugin not found: $pluginId"))
-
-                    val trackingContext =
-                        trackingContexts[pluginId]
-                            ?: return@withLock Result.failure(Exception("No context for plugin: $pluginId"))
-
-                    // Keyed off the `enabled` flag, same as before this PR: the only case
-                    // where the flag is set while the plugin is not actually running is the
-                    // RBAC hide (state = DISABLED, `enabled` left true) - and that path must
-                    // stay silent here anyway, because the user cannot see the plugin and an
-                    // install-deps dialog is not actionable for them; handleAccessChange
-                    // reports when access actually arrives. The report below is gated on
-                    // canAccess for the same reason, so a state-based key would only unblock
-                    // a branch the gate immediately re-blocks.
-                    wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
-
-                    // Attributed for the duration of register(), so a callback the
-                    // plugin wires up and invokes synchronously from here is
-                    // attributed to it. NOT because this escapes uncaught - the
-                    // catch below turns it into Result.failure - which an earlier
-                    // version of this comment claimed and was wrong about.
-                    PluginExecutionBoundary.runAttributed(pluginId) {
-                        loadedPlugin.instance.register(trackingContext)
-                    }
-
-                    // Enable sandbox
-                    sandboxManager.enablePlugin(pluginId)
-
-                    clearPluginHealth(pluginId)
-
-                    // Update state
-                    val currentInfo = _pluginStates.value[pluginId]
-                    if (currentInfo != null) {
-                        updatePluginState(
-                            pluginId,
-                            currentInfo.copy(
-                                state = PluginState.LOADED,
-                                enabled = true,
-                            ),
-                        )
-                    }
-
-                    Result.success(Unit)
+                    val outcome =
+                        if (isSecurityRequired) {
+                            val currentInfo =
+                                _pluginStates.value[pluginId]
+                                    ?: return@withLock Result.failure(
+                                        Exception("Security-required plugin not found: $pluginId"),
+                                    )
+                            val alreadyEnabled = currentInfo.state == PluginState.LOADED && currentInfo.enabled
+                            val enableResult =
+                                if (alreadyEnabled) {
+                                    Result.success(Unit)
+                                } else {
+                                    enableSecurityRequiredPlugin(currentInfo)
+                                }
+                            EnableOutcome(enableResult, alreadyEnabled)
+                        } else {
+                            enableInProcessPlugin(pluginId)
+                        }
+                    wasAlreadyEnabled = outcome.wasAlreadyEnabled
+                    outcome.result
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (e: Throwable) {
@@ -1792,7 +1773,7 @@ class DynamicPluginManager(
         // Outside the mutex, same as installPlugin. Skipped when the plugin
         // was already enabled: a redundant enable must not discard an open
         // panel's in-memory state (resetComponent loses it by design).
-        if (result.isSuccess && !wasAlreadyEnabled) notifyPanelsRefresh(pluginId)
+        if (result.isSuccess && !wasAlreadyEnabled && !isSecurityRequired) notifyPanelsRefresh(pluginId)
         val activatedManifest = _pluginStates.value[pluginId]?.manifest
         if (activatedManifest != null &&
             shouldReportPluginReenable(
@@ -1805,6 +1786,110 @@ class DynamicPluginManager(
             notifyPluginActivated(activatedManifest)
         }
         return result
+    }
+
+    private suspend fun enableInProcessPlugin(pluginId: String): EnableOutcome {
+        val loadedPlugin = pluginLoader.getPlugin(pluginId)
+        val trackingContext = trackingContexts[pluginId]
+        val wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
+
+        return when {
+            loadedPlugin == null -> {
+                EnableOutcome(Result.failure(Exception("Plugin not found: $pluginId")), false)
+            }
+
+            trackingContext == null -> {
+                EnableOutcome(Result.failure(Exception("No context for plugin: $pluginId")), false)
+            }
+
+            else -> {
+                // Attributed for the duration of register(), so a callback the plugin wires up and
+                // invokes synchronously from here is attributed to it. The outer boundary converts
+                // ordinary registration failures into the existing Result contract.
+                PluginExecutionBoundary.runAttributed(pluginId) {
+                    loadedPlugin.instance.register(trackingContext)
+                }
+                sandboxManager.enablePlugin(pluginId)
+                clearPluginHealth(pluginId)
+
+                _pluginStates.value[pluginId]?.let { currentInfo ->
+                    updatePluginState(
+                        pluginId,
+                        currentInfo.copy(
+                            state = PluginState.LOADED,
+                            enabled = true,
+                        ),
+                    )
+                }
+                EnableOutcome(Result.success(Unit), wasAlreadyEnabled)
+            }
+        }
+    }
+
+    /**
+     * Enable a protected plugin without ever resolving its code through the host loader.
+     *
+     * The marker is read again at the lifecycle boundary because the JAR can be replaced
+     * while the plugin is disabled. A changed or unreadable marker fails closed rather than
+     * turning an existing protected state into an ordinary in-process load.
+     */
+    private suspend fun enableSecurityRequiredPlugin(info: DynamicPluginInfo): Result<Unit> {
+        val pluginId = info.manifest.pluginId
+        val marker = SecurityRequiredPlugin.readRequirement(info.jarPath)
+        val validationError =
+            when {
+                marker.isFailure -> {
+                    marker.exceptionOrNull()
+                }
+
+                marker.getOrNull() != SecurityRequirement.REQUIRED -> {
+                    IllegalStateException("Security-required marker missing for protected plugin $pluginId")
+                }
+
+                !canAccess(info.manifest) -> {
+                    IllegalStateException("Plugin access denied: $pluginId")
+                }
+
+                outOfProcessSpawner == null -> {
+                    IllegalStateException("Security-required plugin $pluginId has no protected spawner")
+                }
+
+                else -> {
+                    null
+                }
+            }
+        if (validationError != null) return failProtectedEnable(info, validationError)
+
+        val spawn = checkNotNull(outOfProcessSpawner).spawn(info.manifest, info.jarPath, securityRequired = true)
+        return if (spawn.isFailure) {
+            failProtectedEnable(info, spawn.exceptionOrNull() ?: Exception("Protected spawn failed"))
+        } else {
+            clearPluginHealth(pluginId)
+            updatePluginState(
+                pluginId,
+                info.copy(
+                    state = PluginState.LOADED,
+                    enabled = true,
+                    errorMessage = null,
+                ),
+            )
+            Result.success(Unit)
+        }
+    }
+
+    private fun failProtectedEnable(
+        info: DynamicPluginInfo,
+        error: Throwable,
+    ): Result<Unit> {
+        updatePluginState(
+            info.manifest.pluginId,
+            info.copy(
+                state = PluginState.DISABLED,
+                enabled = false,
+                errorMessage = error.message,
+            ),
+        )
+        return Result.failure(error)
     }
 
     private fun clearPluginHealth(pluginId: String) {
@@ -1990,19 +2075,21 @@ class DynamicPluginManager(
     suspend fun disablePlugin(pluginId: String): Result<Unit> {
         return mutex.withLock {
             try {
-                val trackingContext =
-                    trackingContexts[pluginId]
-                        ?: return@withLock Result.failure(Exception("No context for plugin: $pluginId"))
-
-                // Unregister all panels and tabs
-                trackingContext.unregisterAll()
-
-                // Disable sandbox
-                sandboxManager.disablePlugin(pluginId)
-
-                // Update state
-                val currentInfo = _pluginStates.value[pluginId]
-                if (currentInfo != null) {
+                if (securityRequiredPluginIds.contains(pluginId)) {
+                    val currentInfo =
+                        _pluginStates.value[pluginId]
+                            ?: return@withLock Result.failure(
+                                Exception("Security-required plugin not found: $pluginId"),
+                            )
+                    val spawner =
+                        outOfProcessSpawner
+                            ?: return@withLock Result.failure(
+                                IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
+                            )
+                    val termination = spawner.terminate(pluginId)
+                    if (termination.isFailure) {
+                        return@withLock termination
+                    }
                     updatePluginState(
                         pluginId,
                         currentInfo.copy(
@@ -2010,9 +2097,32 @@ class DynamicPluginManager(
                             enabled = false,
                         ),
                     )
-                }
+                    Result.success(Unit)
+                } else {
+                    val trackingContext =
+                        trackingContexts[pluginId]
+                            ?: return@withLock Result.failure(Exception("No context for plugin: $pluginId"))
 
-                Result.success(Unit)
+                    // Unregister all panels and tabs
+                    trackingContext.unregisterAll()
+
+                    // Disable sandbox
+                    sandboxManager.disablePlugin(pluginId)
+
+                    // Update state
+                    val currentInfo = _pluginStates.value[pluginId]
+                    if (currentInfo != null) {
+                        updatePluginState(
+                            pluginId,
+                            currentInfo.copy(
+                                state = PluginState.DISABLED,
+                                enabled = false,
+                            ),
+                        )
+                    }
+
+                    Result.success(Unit)
+                }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
@@ -2579,33 +2689,60 @@ class DynamicPluginManager(
                     info.enabled && !hiddenPlugins.containsKey(pluginId) && !canAccess(info.manifest)
                 }
             for ((pluginId, info) in nowHidden) {
-                val trackingContext = trackingContexts[pluginId]
-                if (trackingContext != null) {
-                    trackingContext.unregisterAll()
-                    hiddenPlugins[pluginId] = info
-                    updatePluginState(pluginId, info.copy(state = PluginState.DISABLED))
-                    val missing = missingPermissions(info.manifest)
-                    logger.info(
-                        LogCategory.SYSTEM,
-                        "Hid plugin after access lost",
-                        mapOf(
-                            "pluginId" to pluginId,
-                            "missingPermissions" to missing.joinToString(","),
-                            "hint" to
-                                if (missing.isNotEmpty()) {
-                                    "Ask an admin to grant: ${missing.joinToString(", ")}"
-                                } else {
-                                    "Requires admin"
-                                },
-                        ),
-                    )
-                }
+                hidePluginAfterAccessRevoked(pluginId, info)
             }
         }
         // Startup/login reconciliation is silent. Later grants for the same user report
         // the successfully registered manifests, outside the lock and off the UI thread.
         if (reportMissingDependencies) {
             for (manifest in reactivated) notifyPluginActivated(manifest)
+        }
+    }
+
+    private suspend fun hidePluginAfterAccessRevoked(
+        pluginId: String,
+        info: DynamicPluginInfo,
+    ) {
+        if (securityRequiredPluginIds.contains(pluginId)) {
+            val termination = outOfProcessSpawner?.terminate(pluginId)
+            if (termination?.isSuccess == true) {
+                updatePluginState(
+                    pluginId,
+                    info.copy(
+                        state = PluginState.DISABLED,
+                        enabled = false,
+                    ),
+                )
+            } else {
+                logger.error(
+                    LogCategory.SYSTEM,
+                    "Failed to terminate protected plugin after access was revoked",
+                    mapOf("pluginId" to pluginId),
+                    termination?.exceptionOrNull()
+                        ?: IllegalStateException("No protected spawner available"),
+                )
+            }
+        } else {
+            trackingContexts[pluginId]?.let { trackingContext ->
+                trackingContext.unregisterAll()
+                hiddenPlugins[pluginId] = info
+                updatePluginState(pluginId, info.copy(state = PluginState.DISABLED))
+                val missing = missingPermissions(info.manifest)
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "Hid plugin after access lost",
+                    mapOf(
+                        "pluginId" to pluginId,
+                        "missingPermissions" to missing.joinToString(","),
+                        "hint" to
+                            if (missing.isNotEmpty()) {
+                                "Ask an admin to grant: ${missing.joinToString(", ")}"
+                            } else {
+                                "Requires admin"
+                            },
+                    ),
+                )
+            }
         }
     }
 
