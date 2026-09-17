@@ -224,6 +224,70 @@ class PluginSandboxUnloadAwaitTest {
         }
 
     @Test
+    fun `cancellation during persisted protected startup propagates to the caller`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            val spawnStarted = CompletableDeferred<Unit>()
+            val spawnReleased = CompletableDeferred<Unit>()
+            val spawner =
+                object : OutOfProcessPluginSpawner {
+                    override suspend fun spawn(
+                        manifest: PluginManifest,
+                        jarPath: String,
+                        securityRequired: Boolean,
+                    ): Result<Unit> {
+                        spawnStarted.complete(Unit)
+                        spawnReleased.await()
+                        return Result.success(Unit)
+                    }
+
+                    override suspend fun terminate(pluginId: String): Result<Unit> = Result.success(Unit)
+                }
+            val manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("Protected plugins must not create a host context") },
+                    outOfProcessSpawner = spawner,
+                )
+            withTempDir { tempDir ->
+                val jar =
+                    PluginJarTestFixtures.writeJar(
+                        tempDir,
+                        "security-required-plugin.jar",
+                        "com.example.security-required",
+                        "1.0.0",
+                        securityRequired = true,
+                    )
+                val load =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        manager.loadPersistedPlugins(
+                            listOf(
+                                PersistedPluginEntry(
+                                    pluginId = "com.example.security-required",
+                                    jarPath = jar.absolutePath,
+                                    enabled = true,
+                                ),
+                            ),
+                        )
+                    }
+                try {
+                    withTimeout(5_000) { spawnStarted.await() }
+                    load.cancel()
+                    withTimeout(5_000) { load.join() }
+                    assertTrue(load.isCancelled)
+                } finally {
+                    spawnReleased.complete(Unit)
+                    load.cancel()
+                    withTimeout(5_000) { load.join() }
+                    manager.disposeWindow()
+                    sandboxManager.dispose()
+                }
+            }
+        }
+
+    @Test
     fun `protected enable and disable use the process spawner`() =
         runBlocking {
             val sandboxManager = PluginSandboxManagerImpl()
