@@ -129,6 +129,7 @@ genisoimage -quiet -output "$test_bundle_iso" -volid BOSS_TEST_BUNDLE -joliet -r
 
 ssh_guest() {
     ssh -q -i "$ssh_key" -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=2 \
+        -o ServerAliveInterval=5 -o ServerAliveCountMax=6 \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ubuntu@127.0.0.1 "$@"
 }
 
@@ -177,11 +178,18 @@ wait_for_ssh() {
 
 wait_for_bootstrap() {
     for _ in {1..180}; do
+        if ssh_guest 'sudo test -f /var/lib/boss-cageforge-bootstrap-complete' >/dev/null 2>&1; then
+            # The marker is written by the final cloud-init command. Wait until that
+            # command has returned before powering off; otherwise the next restricted
+            # boot may resume package setup and leave the guest unresponsive.
+            if ssh_guest 'cloud-init status --wait >/dev/null 2>&1'; then
+                return
+            fi
+        fi
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
             ssh_guest 'sudo tail -n 160 /var/log/cloud-init-output.log || true' >&2 || true
             exit 70
         fi
-        ssh_guest 'sudo test -f /var/lib/boss-cageforge-bootstrap-complete' >/dev/null 2>&1 && return
         sleep 2
     done
     ssh_guest 'sudo tail -n 160 /var/log/cloud-init-output.log || true' >&2 || true
