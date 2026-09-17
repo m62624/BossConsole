@@ -15,12 +15,20 @@ import kotlin.concurrent.withLock
 internal class PluginSessionRegistry {
     private val sessions = ConcurrentHashMap<String, PluginProcessSession>()
     private val generations = ConcurrentHashMap<String, AtomicLong>()
+    private val reservations = ConcurrentHashMap.newKeySet<String>()
 
     fun requireAvailable(pluginId: String) {
         if (isReaping()) throw ReapAdmissionException()
         check(sessions[pluginId] == null) {
             "Refusing to replace active plugin session: $pluginId"
         }
+        check(reservations.add(pluginId)) {
+            "Refusing concurrent startup for plugin: $pluginId"
+        }
+    }
+
+    fun releaseReservation(pluginId: String) {
+        reservations.remove(pluginId)
     }
 
     fun newSession(
@@ -41,6 +49,7 @@ internal class PluginSessionRegistry {
         check(sessions.putIfAbsent(session.pluginId, session) == null) {
             "Refusing to replace active plugin session: ${session.pluginId}"
         }
+        releaseReservation(session.pluginId)
     }
 
     fun current(pluginId: String): PluginProcessSession? = sessions[pluginId]
