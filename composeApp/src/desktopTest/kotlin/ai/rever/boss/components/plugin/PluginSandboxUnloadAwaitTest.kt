@@ -169,6 +169,59 @@ class PluginSandboxUnloadAwaitTest {
             }
         }
 
+    @Test
+    fun `cancellation during protected spawn propagates to the caller`() =
+        runBlocking {
+            val sandboxManager = PluginSandboxManagerImpl()
+            val spawnStarted = CompletableDeferred<Unit>()
+            val spawnReleased = CompletableDeferred<Unit>()
+            val spawner =
+                object : OutOfProcessPluginSpawner {
+                    override suspend fun spawn(
+                        manifest: PluginManifest,
+                        jarPath: String,
+                        securityRequired: Boolean,
+                    ): Result<Unit> {
+                        spawnStarted.complete(Unit)
+                        spawnReleased.await()
+                        return Result.success(Unit)
+                    }
+
+                    override suspend fun terminate(pluginId: String): Result<Unit> = Result.success(Unit)
+                }
+            val manager =
+                DynamicPluginManager(
+                    PanelRegistry(),
+                    TabRegistry(),
+                    sandboxManager,
+                    createSandboxedContext = { _, _ -> error("No plugin is loaded in this fixture") },
+                    outOfProcessSpawner = spawner,
+                )
+            withTempDir { tempDir ->
+                val jar =
+                    PluginJarTestFixtures.writeJar(
+                        tempDir,
+                        "security-required-plugin.jar",
+                        "com.example.security-required",
+                        "1.0.0",
+                        securityRequired = true,
+                    )
+                val install = async(start = CoroutineStart.UNDISPATCHED) { manager.installPlugin(jar.absolutePath) }
+                try {
+                    withTimeout(5_000) { spawnStarted.await() }
+                    install.cancel()
+                    withTimeout(5_000) { install.join() }
+                    assertTrue(install.isCancelled)
+                } finally {
+                    spawnReleased.complete(Unit)
+                    install.cancel()
+                    withTimeout(5_000) { install.join() }
+                    manager.disposeWindow()
+                    sandboxManager.dispose()
+                }
+            }
+        }
+
     private fun verifyRemoval(cancelCaller: Boolean) =
         runBlocking {
             val real = PluginSandboxManagerImpl()
