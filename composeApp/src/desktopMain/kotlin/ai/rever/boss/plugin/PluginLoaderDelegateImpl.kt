@@ -186,6 +186,9 @@ class PluginLoaderDelegateImpl(
                 logger.error(LogCategory.SYSTEM, "Failed to load plugin", error = result.exceptionOrNull())
                 null
             }
+        } catch (e: CancellationException) {
+            // Cancellation is lifecycle control flow, not a recoverable delegate result.
+            throw e
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception loading plugin", error = e)
             null
@@ -371,6 +374,8 @@ class PluginLoaderDelegateImpl(
                 )
             }
             PluginUnloadResult(unloaded = result.isSuccess, reasons = refusalReasons)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception unloading plugin", error = e)
             PluginUnloadResult(unloaded = false)
@@ -409,51 +414,54 @@ class PluginLoaderDelegateImpl(
         )
     }
 
+    /**
+     * Resolve the current reload artifact from persisted and relocated plugin paths.
+     *
+     * This runs before unloading and resolves against the disk rather than trusting the loaded
+     * record. An update may replace the loaded JAR with a version-named file, so the original
+     * path can already be gone; trusting it would unload a running plugin and leave it unloaded
+     * when the reload cannot find the replacement. The lookup also runs on IO because it reads
+     * installed.json and may open plugin manifests while searching relocated candidates.
+     */
+    private suspend fun resolveReloadJarPath(
+        pluginId: String,
+        loadedJarPath: String?,
+    ): String? =
+        withContext(Dispatchers.IO) {
+            val persistedJarPath =
+                PluginPersistence.getInstalledPlugins().firstOrNull { it.pluginId == pluginId }?.jarPath
+            resolveReloadJarPath(
+                candidates =
+                    ReloadJarCandidates(
+                        loadedJarPath = loadedJarPath,
+                        persistedJarPath = persistedJarPath,
+                    ),
+                exists = { File(it).isFile },
+                relocated = {
+                    val dir = (loadedJarPath ?: persistedJarPath)?.let { File(it).parentFile }
+                    findRelocatedPluginJar(dir, pluginId)?.absolutePath
+                },
+                manifestVersion = { path ->
+                    // No swallow: let read failures reach the resolver's
+                    // onManifestVersionReadFailed hook so the candidate is logged.
+                    PluginManifestReader.readFromJar(path).version
+                },
+                onManifestVersionReadFailed = { path ->
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Could not read manifest version of a reload candidate jar",
+                        mapOf("pluginId" to pluginId, "path" to path),
+                    )
+                },
+            )
+        }
+
     private suspend fun doReloadPlugin(pluginId: String): LoadedPluginInfo? {
         return try {
             logger.info(LogCategory.SYSTEM, "Reloading plugin via delegate", mapOf("pluginId" to pluginId))
 
-            // Resolve the JAR before unloading, and resolve it against the DISK rather than
-            // trusting the loaded record. Reloads are most often triggered BY an update that
-            // just replaced the jar: the updater writes a version-named file and deletes the
-            // old one, so the path this plugin was loaded from is exactly the path that no
-            // longer exists. Taking it on trust unloaded the plugin and then failed to load
-            // it, leaving it gone until the next restart.
-            //
-            // Checking existence up front also means a reload that cannot succeed no longer
-            // tears the running plugin down first.
             val loadedJarPath = dynamicPluginManager.getPluginInfo(pluginId)?.jarPath
-            // Disk IO, and this runs on reloadScope (Dispatchers.Default): reading the record
-            // parses installed.json and, on a cold cache, opens every plugin jar's manifest.
-            val jarPath =
-                withContext(Dispatchers.IO) {
-                    val persistedJarPath =
-                        PluginPersistence.getInstalledPlugins().firstOrNull { it.pluginId == pluginId }?.jarPath
-                    resolveReloadJarPath(
-                        candidates =
-                            ReloadJarCandidates(
-                                loadedJarPath = loadedJarPath,
-                                persistedJarPath = persistedJarPath,
-                            ),
-                        exists = { File(it).isFile },
-                        relocated = {
-                            val dir = (loadedJarPath ?: persistedJarPath)?.let { File(it).parentFile }
-                            findRelocatedPluginJar(dir, pluginId)?.absolutePath
-                        },
-                        manifestVersion = { path ->
-                            // No swallow: let read failures reach the resolver's
-                            // onManifestVersionReadFailed hook so the candidate is logged.
-                            PluginManifestReader.readFromJar(path).version
-                        },
-                        onManifestVersionReadFailed = { path ->
-                            logger.warn(
-                                LogCategory.SYSTEM,
-                                "Could not read manifest version of a reload candidate jar",
-                                mapOf("pluginId" to pluginId, "path" to path),
-                            )
-                        },
-                    )
-                }
+            val jarPath = resolveReloadJarPath(pluginId, loadedJarPath)
 
             if (jarPath == null) {
                 logger.warn(
@@ -488,6 +496,8 @@ class PluginLoaderDelegateImpl(
 
             // Reload
             loadPlugin(jarPath, reportDependencies = false)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception reloading plugin", error = e)
             null
@@ -587,6 +597,8 @@ class PluginLoaderDelegateImpl(
                 PluginPersistence.setPluginEnabled(pluginId, true)
             }
             result.isSuccess
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception enabling plugin", error = e)
             false
@@ -600,6 +612,8 @@ class PluginLoaderDelegateImpl(
                 PluginPersistence.setPluginEnabled(pluginId, false)
             }
             result.isSuccess
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.error(LogCategory.SYSTEM, "Exception disabling plugin", error = e)
             false

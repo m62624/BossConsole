@@ -1286,6 +1286,8 @@ class DynamicPluginManager(
 
                     Result.success(info)
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    // Cancellation is lifecycle control flow, not an install failure. Propagate it
+                    // so a protected spawn cannot be reported as a normal failed install.
                     throw cancelled
                 } catch (e: Throwable) {
                     logger.error(
@@ -1751,26 +1753,7 @@ class DynamicPluginManager(
                     // Enable sandbox
                     sandboxManager.enablePlugin(pluginId)
 
-                    // Clear prior crash state on successful re-enable, on BOTH axes.
-                    //
-                    // clearIncompatible alone left hasCrashed(pluginId) true, so a
-                    // plugin the user deliberately re-enabled came back still
-                    // showing PluginErrorFallback instead of its content, and they
-                    // had to find "Restart" inside that fallback. Crash recovery
-                    // made that reachable in one click: its notice tells the user to
-                    // re-enable from Toolbox, and without this the instruction does
-                    // not do what it says.
-                    //
-                    // It also un-suppresses the crash dialog for this plugin -
-                    // CrashHandler.isSuppressedByQuarantine skips prompting while the
-                    // RECOVERY quarantine is set (not hasCrashed, which a plain
-                    // contained render fault also sets and which must never silence
-                    // the dialog for a plugin that is still enabled and running).
-                    // Right for a plugin the user has already dealt with, wrong once
-                    // they have deliberately re-armed it.
-                    PluginCrashRegistry.clearIncompatible(pluginId)
-                    PluginCrashRegistry.clearCrash(pluginId)
-                    PluginRecoveryQuarantine.clear(pluginId)
+                    clearPluginHealth(pluginId)
 
                     // Update state
                     val currentInfo = _pluginStates.value[pluginId]
@@ -1785,6 +1768,8 @@ class DynamicPluginManager(
                     }
 
                     Result.success(Unit)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
                 } catch (e: Throwable) {
                     logger.error(
                         LogCategory.SYSTEM,
@@ -1820,6 +1805,15 @@ class DynamicPluginManager(
             notifyPluginActivated(activatedManifest)
         }
         return result
+    }
+
+    private fun clearPluginHealth(pluginId: String) {
+        // Re-enabling deliberately clears both incompatibility and crash state. Clearing only
+        // incompatibility leaves the plugin in the error fallback, while leaving the recovery
+        // quarantine set suppresses the next crash dialog.
+        PluginCrashRegistry.clearIncompatible(pluginId)
+        PluginCrashRegistry.clearCrash(pluginId)
+        PluginRecoveryQuarantine.clear(pluginId)
     }
 
     /**
@@ -2009,6 +2003,8 @@ class DynamicPluginManager(
                 }
 
                 Result.success(Unit)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logger.error(
                     LogCategory.SYSTEM,
