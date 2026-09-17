@@ -1285,6 +1285,8 @@ class DynamicPluginManager(
                     )
 
                     Result.success(info)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
                 } catch (e: Throwable) {
                     logger.error(
                         LogCategory.SYSTEM,
