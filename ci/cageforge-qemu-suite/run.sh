@@ -13,8 +13,8 @@ cd "$CAGEFORGE_SOURCE_ROOT"
 ./gradlew \
     :boss-process-manager:nativeSecurityTest \
     --offline \
-    --max-workers=2 \
+    --max-workers=1 \
     --no-daemon \
     --console=plain \
-    -Dorg.gradle.jvmargs='-Xmx1536M -Dfile.encoding=UTF-8' \
-    -Dkotlin.daemon.jvm.options=-Xmx1024M
+    -Dorg.gradle.jvmargs='-Xmx1024M -Dfile.encoding=UTF-8' \
+    -Pkotlin.daemon.jvmargs=-Xmx768M
