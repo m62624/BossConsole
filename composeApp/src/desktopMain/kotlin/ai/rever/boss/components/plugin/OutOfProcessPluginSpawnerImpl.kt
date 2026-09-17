@@ -183,16 +183,17 @@ class OutOfProcessPluginSpawnerImpl(
         session: PluginProcessSession,
         descendants: List<ProcessHandle>,
     ): Boolean {
-        // Kill first, drop the registry entry second: while the child is alive the registry entry
-        // is the only thing that would let a host exit reap it.
+        // Kill first, then complete the session cleanup. Ownership remains registered until the
+        // session has reached STOPPED; removing it earlier would expose a partially-cleaned
+        // process to a concurrent shutdown or replacement.
         ai.rever.boss.kernel
             .killProcessDescendants(descendants)
         val terminated = !session.process.isAlive || awaitForcedExit(session.process)
         if (!terminated) return false
 
-        kernelRegistry()?.unregisterIfSame(session.config.processId, session.process)
         session.markTerminated()
         session.markCleaned()
+        kernelRegistry()?.unregisterIfSame(session.config.processId, session.process)
         sessionRegistry.removeIfCurrent(session)
         return true
     }
