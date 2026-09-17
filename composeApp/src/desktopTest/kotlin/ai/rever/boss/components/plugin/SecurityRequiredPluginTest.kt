@@ -33,6 +33,25 @@ class SecurityRequiredPluginTest {
     }
 
     @Test
+    fun `nested marker requires protected launch`() {
+        val jar = writeJar("{\"security\":{\"required\":true}}")
+
+        val result = SecurityRequiredPlugin.readRequirement(jar.toString())
+
+        assertEquals(SecurityRequirement.REQUIRED, result.getOrThrow())
+    }
+
+    @Test
+    fun `conflicting marker fields fail closed`() {
+        val jar = writeJar("{\"securityRequired\":true,\"security\":{\"required\":false}}")
+
+        val result = SecurityRequiredPlugin.readRequirement(jar.toString())
+
+        assertTrue(result.isFailure)
+        assertFalse(result.isSuccess)
+    }
+
+    @Test
     fun `malformed marker fails closed`() {
         val jar = writeJar("{\"securityRequired\":\"true\"}")
 
