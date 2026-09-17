@@ -145,3 +145,87 @@ jobs:
           path: ${{ runner.temp }}/boss-cageforge-vm-logs
           if-no-files-found: warn
           retention-days: 7
+
+  macos-native:
+    name: BOSS native security smoke on macOS
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup JDK
+        uses: actions/setup-java@v6.0.0
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # macOS uses Cageforge's native Seatbelt backend directly. It does not
+      # need QEMU; the runner itself is the native enforcement environment.
+      - name: Run native security smoke
+        run: |
+          ./gradlew \
+            :boss-process-manager:nativeSecurityTest \
+            --no-daemon \
+            --max-workers=2 \
+            --console=plain \
+            --stacktrace
+
+      - name: Upload macOS native security test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: boss-cageforge-macos-security-results
+          path: |
+            modules/boss-process-manager/build/test-results/nativeSecurityTest/
+            modules/boss-process-manager/build/reports/tests/nativeSecurityTest/
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-native:
+    name: BOSS native security smoke on Windows
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup JDK
+        uses: actions/setup-java@v6.0.0
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # The first protected launch may invoke Cageforge WindowsSetup and its
+      # owner-scoped UAC provisioning. Subsequent launches reuse the verified
+      # setup; any provisioning failure fails this native lane.
+      - name: Run native security smoke
+        run: |
+          ./gradlew \
+            :boss-process-manager:nativeSecurityTest \
+            --no-daemon \
+            --max-workers=2 \
+            --console=plain \
+            --stacktrace
+
+      - name: Upload Windows native security test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: boss-cageforge-windows-security-results
+          path: |
+            modules/boss-process-manager/build/test-results/nativeSecurityTest/
+            modules/boss-process-manager/build/reports/tests/nativeSecurityTest/
+          if-no-files-found: warn
+          retention-days: 7
