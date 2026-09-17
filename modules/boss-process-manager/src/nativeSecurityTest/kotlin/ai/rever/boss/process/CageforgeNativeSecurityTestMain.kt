@@ -24,6 +24,13 @@ object CageforgeNativeSecurityTestMain {
         }
 
         listener.summary.printTo(PrintWriter(System.out, true))
+        if (listener.summary.failures.isNotEmpty()) {
+            val errorWriter = PrintWriter(System.err, true)
+            listener.summary.failures.forEach { failure ->
+                errorWriter.println("FAILED: ${failure.testIdentifier.displayName}")
+                failure.exception.printStackTrace(errorWriter)
+            }
+        }
         check(listener.summary.totalFailureCount == 0L) {
             "native security smoke reported ${listener.summary.totalFailureCount} failure(s)"
         }
