@@ -5,23 +5,15 @@ set -euo pipefail
 cd "$CAGEFORGE_SOURCE_ROOT"
 
 # Resolve and compile the BOSS test consumer while the guest still has its
-# unrestricted preparation network. The actual native assertion runs later in
-# the restricted QEMU boot, not in this preparation phase.
+# unrestricted preparation network. The dry run resolves the exact test
+# runtime classpath without executing a security assertion; the actual native
+# assertion runs later in the restricted QEMU boot.
 # Keep the preparation bounded for the pinned four-gigabyte guest: the project
 # defaults are appropriate for developer machines but can otherwise let the
 # Gradle and Kotlin daemons exhaust the guest before the native smoke starts.
 ./gradlew \
-    :boss-process-manager:dependencies \
-    --configuration=nativeSecurityTestRuntimeClasspath \
-    --max-workers=1 \
-    --no-daemon \
-    --console=plain \
-    -Dorg.gradle.jvmargs='-Xmx1024M -Dfile.encoding=UTF-8' \
-    -Pkotlin.daemon.jvmargs=-Xmx768M
-
-./gradlew \
-    :boss-process-manager:compileNativeSecurityTestKotlin \
-    :boss-process-manager:nativeSecurityTestClasses \
+    :boss-process-manager:nativeSecurityTest \
+    --test-dry-run \
     --max-workers=1 \
     --no-daemon \
     --console=plain \
