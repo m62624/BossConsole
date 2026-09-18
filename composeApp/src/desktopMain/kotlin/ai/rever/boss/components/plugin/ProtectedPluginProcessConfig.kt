@@ -151,14 +151,15 @@ private fun protectedClasspathRoots(
     buildList {
         addAll(classpathRoots(System.getProperty("java.class.path")))
         addAll(classpathRoots(classpath))
-        add(
+        val javaHome =
             File(System.getProperty("java.home"))
                 .also {
                     require(it.isAbsolute && it.isDirectory) {
                         "java.home must be an absolute directory: ${it.path}"
                     }
-                }.normalize(),
-        )
+                }.normalize()
+        add(javaHome)
+        File(javaHome, "conf/security").canonicalFile.takeIf { it.isDirectory }?.let(::add)
         add(
             File(ProcessSpawner.findJavaExecutable())
                 .also {
