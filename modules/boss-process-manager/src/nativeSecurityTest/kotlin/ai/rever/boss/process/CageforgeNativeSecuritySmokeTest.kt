@@ -350,6 +350,7 @@ private fun authenticatedIpcConfig(
             .map(::File) +
             listOf(
                 File(System.getProperty("java.home")),
+                File(System.getProperty("java.home"), "conf").canonicalFile,
                 File(System.getProperty("java.home"), "conf/security").canonicalFile,
                 File(javaExecutable),
             )
@@ -391,6 +392,7 @@ private fun createLocalIpcConfig(
             .map(::File) +
             listOf(
                 File(System.getProperty("java.home")),
+                File(System.getProperty("java.home"), "conf").canonicalFile,
                 File(System.getProperty("java.home"), "conf/security").canonicalFile,
                 File(javaExecutable),
                 socketRoot.toFile(),
