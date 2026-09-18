@@ -7,6 +7,11 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.StandardProtocolFamily
+import java.net.UnixDomainSocketAddress
+import java.nio.ByteBuffer
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -14,6 +19,44 @@ import kotlin.io.path.createDirectories
 
 /** Representative BOSS-side native smoke; the complete backend suite remains in Cageforge CI. */
 class CageforgeNativeSecuritySmokeTest {
+    @Test
+    fun nativeProcessCanReachOnlyAnExplicitlyAllowedLocalIpcEndpoint() {
+        val workspace = Files.createTempDirectory("boss-cageforge-ipc-")
+        val logs = Files.createTempDirectory("boss-cageforge-ipc-logs-")
+        val socketRoot = Files.createTempDirectory("boss-cageforge-ipc-sockets-")
+        val allowedSocket = socketRoot.resolve("allowed.sock")
+        val blockedSocket = socketRoot.resolve("blocked.sock")
+        val result = workspace.resolve("ipc-result.txt")
+        var allowedServer: ServerSocketChannel? = null
+        var blockedServer: ServerSocketChannel? = null
+        var managed: ManagedProcess? = null
+        try {
+            if (isWindows()) {
+                assertThrowsUnsupportedLocalIpc(workspace, allowedSocket)
+                return
+            }
+
+            allowedServer = unixServer(allowedSocket)
+            blockedServer = unixServer(blockedSocket)
+            val config = createLocalIpcConfig(workspace, socketRoot, allowedSocket, blockedSocket, result)
+
+            managed = ProcessSpawner("native-security-ipc", logs.toFile()).spawn(config)
+            assertTrue(managed.process.waitFor(10, TimeUnit.SECONDS), "local IPC probe did not exit")
+            val output = awaitFileText(result)
+            assertTrue(output.contains("allowed-ipc-connected"), output)
+            assertTrue(output.contains("blocked-ipc-denied"), output)
+            assertEquals(0, managed.process.exitValue())
+            assertEquals('a'.code.toByte(), readSocketByte(allowedServer))
+        } finally {
+            managed?.let { terminateAfterTest(it.process) }
+            allowedServer?.close()
+            blockedServer?.close()
+            logs.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            socketRoot.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun nativeProcessEnforcesWorkspaceNetworkAndDescendantPolicy() {
         val workspace = Files.createTempDirectory("boss-cageforge-smoke-")
@@ -165,6 +208,90 @@ class CageforgeNativeSecuritySmokeTest {
     }
 }
 
+private fun createLocalIpcConfig(
+    workspace: Path,
+    socketRoot: Path,
+    allowedSocket: Path,
+    blockedSocket: Path,
+    result: Path,
+): ProcessConfig {
+    val classpath = System.getProperty("java.class.path")
+    val javaExecutable = ProcessSpawner.findJavaExecutable()
+    val readRoots =
+        classpath
+            .split(File.pathSeparator)
+            .filter { it.isNotBlank() }
+            .map(::File) +
+            listOf(
+                File(System.getProperty("java.home")),
+                File(System.getProperty("java.home"), "conf/security").canonicalFile,
+                File(javaExecutable),
+                socketRoot.toFile(),
+            )
+    return ProcessConfig(
+        processId = "native-security-ipc",
+        processType = ProcessType.APP,
+        displayName = "Cageforge local IPC smoke",
+        mainClass = CageforgeLocalIpcProbe::class.java.name,
+        classpath = classpath,
+        workDir = workspace.toFile(),
+        environment =
+            mapOf(
+                "BOSS_SMOKE_ALLOWED_SOCKET" to allowedSocket.toString(),
+                "BOSS_SMOKE_BLOCKED_SOCKET" to blockedSocket.toString(),
+                "BOSS_SMOKE_RESULT" to result.toString(),
+            ),
+        cageforge =
+            CageforgeProcessPolicy.workspace(
+                workspace.toFile(),
+                readRoots,
+                localIpcPaths = listOf(allowedSocket.toString()),
+            ),
+    )
+}
+
+private fun unixServer(path: Path): ServerSocketChannel =
+    ServerSocketChannel.open(StandardProtocolFamily.UNIX).also {
+        it.bind(UnixDomainSocketAddress.of(path))
+    }
+
+private fun readSocketByte(server: ServerSocketChannel?): Byte {
+    requireNotNull(server) { "local IPC server was not created" }
+    server.configureBlocking(true)
+    return server.accept().use { client ->
+        val buffer = ByteBuffer.allocate(1)
+        while (buffer.hasRemaining()) check(client.read(buffer) >= 0) { "local IPC client closed early" }
+        buffer.array().single()
+    }
+}
+
+private fun assertThrowsUnsupportedLocalIpc(
+    workspace: Path,
+    endpoint: Path,
+) {
+    val error =
+        runCatching {
+            CageforgeProcessPolicy.workspace(
+                workspace.toFile(),
+                localIpcPaths = listOf(endpoint.toString()),
+            )
+        }.exceptionOrNull()
+    assertTrue(
+        error is IllegalArgumentException && error.message.orEmpty().contains("unsupported"),
+        "Windows protected local IPC must fail closed: $error",
+    )
+}
+
+private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+
+private fun awaitFileText(path: Path): String {
+    repeat(200) {
+        if (Files.isRegularFile(path)) return Files.readString(path)
+        Thread.sleep(50)
+    }
+    return Files.readString(path)
+}
+
 /** Child JVM used only by the native smoke. */
 object CageforgeNativeProbe {
     @JvmStatic
@@ -207,6 +334,35 @@ object CageforgeNativeGrandchild {
         val marker = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_GRANDCHILD")))
         Files.writeString(marker, "created")
         println("grandchild-ready")
+    }
+}
+
+object CageforgeLocalIpcProbe {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        val allowed = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_ALLOWED_SOCKET")))
+        val blocked = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_BLOCKED_SOCKET")))
+        val result = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_RESULT")))
+        val statuses =
+            buildList {
+                runCatching { connectAndWrite(allowed, 'a') }
+                    .onSuccess { add("allowed-ipc-connected") }
+                    .onFailure { add("allowed-ipc-denied: ${it::class.simpleName}: ${it.message}") }
+                runCatching { connectAndWrite(blocked, 'b') }
+                    .onSuccess { add("blocked-ipc-allowed") }
+                    .onFailure { add("blocked-ipc-denied") }
+            }
+        Files.writeString(result, statuses.joinToString("\n"))
+    }
+
+    private fun connectAndWrite(
+        path: Path,
+        value: Char,
+    ) {
+        SocketChannel.open(StandardProtocolFamily.UNIX).use { channel ->
+            channel.connect(UnixDomainSocketAddress.of(path))
+            channel.write(ByteBuffer.wrap(byteArrayOf(value.code.toByte())))
+        }
     }
 }
 
