@@ -161,6 +161,18 @@ private fun protectedClasspathRoots(
         add(javaHome)
         File(javaHome, "conf").canonicalFile.takeIf { it.isDirectory }?.let(::add)
         File(javaHome, "conf/security").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+        File(javaHome, "conf/security/policy").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+        File(javaHome, "conf/security/policy/unlimited").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+        File(javaHome, "conf/security/policy/unlimited/default_US_export.policy")
+            .canonicalFile
+            .takeIf { it.isFile }
+            ?.let(::add)
+        File(javaHome, "conf/security/policy/unlimited/default_local.policy")
+            .canonicalFile
+            .takeIf { it.isFile }
+            ?.let(::add)
+        File(javaHome, "conf/security/java.security.d").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+        File(javaHome, "conf/security/java.security").canonicalFile.takeIf { it.isFile }?.let(::add)
         add(
             File(ProcessSpawner.findJavaExecutable())
                 .also {
