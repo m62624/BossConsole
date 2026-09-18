@@ -57,7 +57,7 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
         mainClass = "ai.rever.boss.plugin.runtime.PluginProcessMainKt",
         classpath = classpath,
         nativeImagePath = nativeImage,
-        jvmArgs = buildJvmArgs(),
+        jvmArgs = buildJvmArgs(workDir, input.securityRequired),
         workDir = workDir,
         restartPolicy = RestartPolicy.ON_FAILURE,
         maxRestarts = manifest.sandbox.maxRestartAttempts,
@@ -171,11 +171,20 @@ private fun protectedClasspathRoots(
         nativeImage?.let(::File)?.let(::add)
     }.distinctBy { it.path }
 
-private fun buildJvmArgs(): List<String> =
+private fun buildJvmArgs(
+    workDir: File,
+    securityRequired: Boolean,
+): List<String> =
     buildList {
         val settings = runCatching { PerformanceSettingsManager.currentSettings.value }.getOrNull()
         add("-Xmx${settings?.pluginJvmHeapMb ?: 512}m")
         add("-Xms${settings?.pluginJvmInitialHeapMb ?: 64}m")
+        if (securityRequired) {
+            // Cageforge keeps the host temp directory private. Netty's Unix transport extracts
+            // its native library at startup, so give the protected child an explicit writable
+            // location inside its already-authorized workspace instead of reopening /tmp.
+            add("-Dio.netty.native.workdir=${workDir.path}")
+        }
         System.getProperty("boss.api.version")?.takeIf { it.isNotBlank() }?.let {
             add("-Dboss.api.version=$it")
         }
