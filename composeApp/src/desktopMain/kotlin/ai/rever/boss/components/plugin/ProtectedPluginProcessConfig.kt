@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.ipc.IpcAddressResolver
 import ai.rever.boss.performance.PerformanceSettingsManager
 import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.pathutils.BossDirectories
@@ -33,9 +34,16 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
         } else {
             emptyList()
         }
+    val processId = pluginProcessId(input.windowId, manifest.pluginId)
+    val localIpcPaths =
+        if (input.securityRequired) {
+            protectedLocalIpcPaths(processId)
+        } else {
+            emptyList()
+        }
 
     return ProcessConfig(
-        processId = pluginProcessId(input.windowId, manifest.pluginId),
+        processId = processId,
         processType = ProcessType.PLUGIN,
         displayName = manifest.displayName,
         mainClass = "ai.rever.boss.plugin.runtime.PluginProcessMainKt",
@@ -52,12 +60,23 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
             if (input.securityRequired) {
                 CageforgePolicyCeiling
                     .forWorkspace(workDir, protectedRoots)
-                    .policyFor(workDir)
+                    .policyFor(workDir, localIpcPaths)
             } else {
                 null
             },
     )
 }
+
+private fun protectedLocalIpcPaths(processId: String): List<String> =
+    listOf(
+        IpcAddressResolver.kernelAddress(),
+        IpcAddressResolver.resolveAddress("plugin", processId),
+    ).map { address ->
+        require(address.startsWith("unix://")) {
+            "Protected Cageforge IPC requires a Unix-domain transport on this platform: $address"
+        }
+        address.removePrefix("unix://")
+    }
 
 private fun validateWorkDir(projectPath: String): File {
     val requested = File(projectPath.ifEmpty { System.getProperty("user.dir") })

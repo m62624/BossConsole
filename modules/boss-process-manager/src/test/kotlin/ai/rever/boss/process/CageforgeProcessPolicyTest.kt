@@ -42,6 +42,34 @@ class CageforgeProcessPolicyTest {
     }
 
     @Test
+    fun `workspace preset restricts local IPC to host-owned Unix socket paths`() {
+        val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
+        try {
+            val kernelSocket = workspace.resolve("boss-kernel.sock")
+            val processSocket = workspace.resolve("boss-plugin.sock")
+            val policy =
+                CageforgeProcessPolicy.workspace(
+                    workspace.toFile(),
+                    localIpcPaths = listOf(kernelSocket.toString(), processSocket.toString()),
+                )
+
+            assertTrue("mode = \"enabled\"" in policy.toml)
+            assertTrue("unix_socket_mode = \"restricted\"" in policy.toml)
+            assertTrue(kernelSocket.toString() in policy.toml)
+            assertTrue(processSocket.toString() in policy.toml)
+            assertTrue("local_network_access = \"deny\"" in policy.toml)
+
+            Cageforge.checkToml(
+                policy.toml,
+                policy.profileName,
+                RuntimeContext(currentDirectory = workspace.toAbsolutePath()),
+            )
+        } finally {
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `missing host approved root fails closed`() {
         val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
         try {

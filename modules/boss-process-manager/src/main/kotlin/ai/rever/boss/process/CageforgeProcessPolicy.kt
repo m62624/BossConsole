@@ -25,6 +25,7 @@ data class CageforgeProcessPolicy(
         fun workspace(
             workspace: File,
             readOnlyRoots: Iterable<File> = emptyList(),
+            localIpcPaths: Iterable<String> = emptyList(),
         ): CageforgeProcessPolicy {
             require(workspace.isAbsolute) { "Cageforge workspace must be absolute" }
             val root = workspace.canonicalFile
@@ -40,6 +41,8 @@ data class CageforgeProcessPolicy(
                     }.filterNot { it == root }
                     .distinctBy { it.path }
 
+            val ipcPaths = localIpcPaths.map(::validatedLocalIpcPath).distinct()
+
             fun tomlString(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
             val rootText = tomlString(root.path)
@@ -48,6 +51,28 @@ data class CageforgeProcessPolicy(
                     "  { target = \"absolute\", path = ${tomlString(path.path)}, access = \"read\" }"
                 }
             val runtimeRulesText = if (runtimeRules.isEmpty()) "" else "$runtimeRules,\n"
+            val networkPolicy =
+                if (ipcPaths.isEmpty()) {
+                    """
+                    [profiles.boss-protected.network]
+                    mode = "disabled"
+                    """.trimIndent()
+                } else {
+                    val socketRules =
+                        ipcPaths.joinToString(",\n") { path ->
+                            "  { path = ${tomlString(path)}, access = \"allow\" }"
+                        }
+                    """
+                    [profiles.boss-protected.network]
+                    mode = "enabled"
+                    domain_mode = "restricted"
+                    unix_socket_mode = "restricted"
+                    local_network_access = "deny"
+                    unix_sockets = [
+                    $socketRules,
+                    ]
+                    """.trimIndent()
+                }
             val toml =
                 """
                 default_profile = "boss-protected"
@@ -67,8 +92,7 @@ data class CageforgeProcessPolicy(
                 $runtimeRulesText  { target = "workspace-root", access = "write" },
                 ]
 
-                [profiles.boss-protected.network]
-                mode = "disabled"
+                $networkPolicy
 
                 [profiles.boss-protected.command]
                 program = "java"
@@ -81,6 +105,18 @@ data class CageforgeProcessPolicy(
                 """.trimIndent() + "\n"
 
             return CageforgeProcessPolicy(toml, "boss-protected")
+        }
+
+        private fun validatedLocalIpcPath(value: String): String {
+            require(!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                "Cageforge pathname local IPC is unsupported on Windows"
+            }
+            require(value.isNotBlank() && '\u0000' !in value) {
+                "Cageforge local IPC path must not be blank or contain NUL"
+            }
+            val path = File(value)
+            require(path.isAbsolute) { "Cageforge local IPC path must be absolute: ${path.path}" }
+            return path.canonicalFile.path
         }
     }
 }
@@ -109,7 +145,10 @@ class CageforgePolicyCeiling private constructor(
     }
 
     /** Materialize the only policy permitted by this host-owned ceiling. */
-    fun policyFor(workspace: File): CageforgeProcessPolicy {
+    fun policyFor(
+        workspace: File,
+        localIpcPaths: Iterable<String> = emptyList(),
+    ): CageforgeProcessPolicy {
         require(workspace.isAbsolute) { "Cageforge requested workspace must be absolute" }
         val requestedRoot = workspace.canonicalFile
         require(requestedRoot.isDirectory) {
@@ -118,7 +157,7 @@ class CageforgePolicyCeiling private constructor(
         require(requestedRoot.toPath().startsWith(allowedWorkspaceRoot.toPath())) {
             "Cageforge requested workspace is outside the host policy ceiling"
         }
-        return CageforgeProcessPolicy.workspace(requestedRoot, readOnlyRoots)
+        return CageforgeProcessPolicy.workspace(requestedRoot, readOnlyRoots, localIpcPaths)
     }
 
     companion object {
