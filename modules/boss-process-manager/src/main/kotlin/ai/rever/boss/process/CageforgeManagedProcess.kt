@@ -1,109 +1,68 @@
 package ai.rever.boss.process
 
 import ai.cageforge.Cageforge
-import ai.cageforge.ProcessResult
 import ai.cageforge.SandboxProcess
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Bridges Cageforge's process handle to the existing BOSS process registry.
+ * Bridges Cageforge's native Java process facade to the existing BOSS process registry.
  *
- * The adapter implements the required process streams and lifecycle operations. Timed waits use
- * Cageforge's completion future directly; forced termination and liveness checks remain expressed
- * through the standard [Process] contract.
+ * The child is created and controlled by Cageforge's native backend. This adapter only owns the
+ * Cageforge runtime lifetime; process waiting, streams, liveness, and termination are delegated
+ * to the official [java.lang.Process] implementation supplied by Cageforge.
  */
 internal class CageforgeManagedProcess(
-    private val sandbox: SandboxProcess,
+    sandbox: SandboxProcess,
     private val runtime: Cageforge,
-) : Process() {
-    private val completion = CompletableFuture<Process>()
-
-    @Volatile private var completedExitCode: Int? = null
-    private val stdout = requireNotNull(sandbox.stdout) { "Cageforge stdout must be configured as pipe" }
-    private val stderr = requireNotNull(sandbox.stderr) { "Cageforge stderr must be configured as pipe" }
-    private val stdin = requireNotNull(sandbox.stdin) { "Cageforge stdin must be configured as pipe" }
+) : Process(), AutoCloseable {
+    private val delegate = sandbox.asJavaProcess()
+    private val resourcesClosed = AtomicBoolean(false)
 
     init {
-        sandbox.waitForAsync().whenComplete { result, error ->
-            if (error == null) {
-                completedExitCode = resultToExitCode(result)
-                completion.complete(this)
-            } else {
-                completion.completeExceptionally(error)
-            }
-            runCatching { sandbox.close() }
-            runCatching { runtime.close() }
-        }
+        delegate.onExit().whenComplete { _, _ -> closeNativeResources() }
     }
 
-    override fun getOutputStream(): OutputStream = stdin
+    override fun getOutputStream(): OutputStream = delegate.outputStream
 
-    override fun getInputStream(): InputStream = stdout
+    override fun getInputStream(): InputStream = delegate.inputStream
 
-    override fun getErrorStream(): InputStream = stderr
+    override fun getErrorStream(): InputStream = delegate.errorStream
 
-    override fun waitFor(): Int {
-        completedExitCode?.let { return it }
-        return runCatching {
-            resultToExitCode(sandbox.waitFor()).also { completedExitCode = it }
-        }.getOrElse { error ->
-            completion.join()
-            completedExitCode ?: throw error
-        }
-    }
+    override fun waitFor(): Int = delegate.waitFor()
 
     override fun waitFor(
         timeout: Long,
         unit: TimeUnit,
-    ): Boolean {
-        require(timeout >= 0) { "timeout must not be negative" }
-        return runCatching { completion.get(timeout, unit) }.fold(
-            onSuccess = { true },
-            onFailure = { error ->
-                when (error) {
-                    is TimeoutException -> {
-                        false
-                    }
+    ): Boolean = delegate.waitFor(timeout, unit)
 
-                    is ExecutionException -> {
-                        throw IllegalStateException(
-                            "Cageforge process wait failed",
-                            error.cause,
-                        )
-                    }
+    override fun exitValue(): Int = delegate.exitValue()
 
-                    is InterruptedException -> {
-                        Thread.currentThread().interrupt()
-                        throw error
-                    }
+    override fun destroy() = delegate.destroy()
 
-                    else -> {
-                        throw error
-                    }
-                }
-            },
-        )
+    override fun destroyForcibly(): Process {
+        delegate.destroyForcibly()
+        return this
     }
 
-    override fun exitValue(): Int =
-        completedExitCode
-            ?: runCatching { sandbox.tryWait()?.let(::resultToExitCode) }
-                .getOrNull()
-                ?.also { completedExitCode = it }
-            ?: throw IllegalThreadStateException("Cageforge process is still running")
+    override fun isAlive(): Boolean = delegate.isAlive
 
-    override fun destroy() {
-        if (!completion.isDone) runCatching { sandbox.kill() }
+    override fun pid(): Long = delegate.pid()
+
+    override fun onExit(): CompletableFuture<Process> =
+        delegate.onExit().thenApply { this }
+
+    override fun supportsNormalTermination(): Boolean = delegate.supportsNormalTermination()
+
+    override fun close() = closeNativeResources()
+
+    private fun closeNativeResources() {
+        if (resourcesClosed.compareAndSet(false, true)) {
+            runCatching { delegate.close() }
+            runCatching { runtime.close() }
+        }
     }
-
-    override fun pid(): Long = sandbox.id.toLong()
-
-    override fun supportsNormalTermination(): Boolean = false
 }
-
-private fun resultToExitCode(result: ProcessResult): Int = result.exitCode ?: -1
