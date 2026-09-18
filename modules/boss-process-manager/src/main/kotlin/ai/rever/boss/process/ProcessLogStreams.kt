@@ -12,17 +12,11 @@ internal class ProcessLogStreams private constructor(
     private val stdout: Lease,
     private val stderr: Lease,
 ) : AutoCloseable {
-    fun attach(process: Process): CompletableFuture<Void> {
-        val drained =
-            CompletableFuture.allOf(
+    fun attach(process: Process): CompletableFuture<Void> =
+        CompletableFuture.allOf(
             startDrain(ProcessOwnedLogInput(process.inputStream, process), stdout),
             startDrain(ProcessOwnedLogInput(process.errorStream, process), stderr),
         )
-        if (process is AutoCloseable) {
-            drained.whenComplete { _, _ -> runCatching { process.close() } }
-        }
-        return drained
-    }
 
     private fun startDrain(
         input: InputStream,
