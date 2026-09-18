@@ -21,6 +21,8 @@ import java.net.Socket
 import java.net.StandardProtocolFamily
 import java.net.UnixDomainSocketAddress
 import java.nio.ByteBuffer
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
@@ -105,11 +107,20 @@ class CageforgeNativeSecuritySmokeTest {
             val config = createLocalIpcConfig(workspace, socketRoot, allowedSocket, blockedSocket, result)
 
             managed = ProcessSpawner("native-security-ipc", logs.toFile()).spawn(config)
-            assertTrue(managed.process.waitFor(10, TimeUnit.SECONDS), "local IPC probe did not exit")
+            val exited = managed.process.waitFor(10, TimeUnit.SECONDS)
+            val status = runCatching { Files.readString(result) }.getOrDefault("<missing: $result>")
+            if (!exited) {
+                assertTrue(status.contains("blocked-ipc-denied"), "local IPC probe did not exit: $status")
+                managed.destroyForcibly()
+                assertTrue(
+                    managed.process.waitFor(10, TimeUnit.SECONDS),
+                    "local IPC probe did not terminate after denied endpoint cleanup",
+                )
+            }
             val output = awaitFileText(result)
             assertTrue(output.contains("allowed-ipc-connected"), output)
             assertTrue(output.contains("blocked-ipc-denied"), output)
-            assertEquals(0, managed.process.exitValue())
+            if (exited) assertEquals(0, managed.process.exitValue())
             assertEquals('a'.code.toByte(), readSocketByte(allowedServer))
         } finally {
             managed?.let { terminateAfterTest(it.process) }
@@ -352,8 +363,30 @@ private fun authenticatedIpcConfig(
                 File(System.getProperty("java.home")),
                 File(System.getProperty("java.home"), "conf").canonicalFile,
                 File(System.getProperty("java.home"), "conf/security").canonicalFile,
+                File(System.getProperty("java.home"), "conf/security/policy").canonicalFile,
+                File(System.getProperty("java.home"), "conf/security/policy/unlimited").canonicalFile,
+                File(
+                    System.getProperty("java.home"),
+                    "conf/security/policy/unlimited/default_US_export.policy",
+                ).canonicalFile,
+                File(
+                    System.getProperty("java.home"),
+                    "conf/security/policy/unlimited/default_local.policy",
+                ).canonicalFile,
+                File(System.getProperty("java.home"), "conf/security/java.security").canonicalFile,
                 File(javaExecutable),
+            ) +
+            listOfNotNull(
+                File(System.getProperty("java.home"), "conf/security/java.security.d")
+                    .canonicalFile
+                    .takeIf { it.isDirectory },
             )
+    val diagnostic = workspace.resolve("auth-diag.txt")
+    Files.writeString(
+        diagnostic,
+        "java.home=${System.getProperty("java.home")}\n" +
+            "read.roots=${readRoots.joinToString(File.pathSeparator)}\n",
+    )
     return ProcessConfig(
         processId = processId,
         processType = ProcessType.PLUGIN,
@@ -362,7 +395,7 @@ private fun authenticatedIpcConfig(
         classpath = classpath,
         workDir = workspace.toFile(),
         jvmArgs = listOf("-Dio.netty.native.workdir=${workspace.toAbsolutePath()}"),
-        environment = mapOf("BOSS_SMOKE_AUTH_DIAG" to workspace.resolve("auth-diag.txt").toString()),
+        environment = mapOf("BOSS_SMOKE_AUTH_DIAG" to diagnostic.toString()),
         cageforge =
             CageforgeProcessPolicy.workspace(
                 workspace.toFile(),
@@ -394,8 +427,24 @@ private fun createLocalIpcConfig(
                 File(System.getProperty("java.home")),
                 File(System.getProperty("java.home"), "conf").canonicalFile,
                 File(System.getProperty("java.home"), "conf/security").canonicalFile,
+                File(System.getProperty("java.home"), "conf/security/policy").canonicalFile,
+                File(System.getProperty("java.home"), "conf/security/policy/unlimited").canonicalFile,
+                File(
+                    System.getProperty("java.home"),
+                    "conf/security/policy/unlimited/default_US_export.policy",
+                ).canonicalFile,
+                File(
+                    System.getProperty("java.home"),
+                    "conf/security/policy/unlimited/default_local.policy",
+                ).canonicalFile,
+                File(System.getProperty("java.home"), "conf/security/java.security").canonicalFile,
                 File(javaExecutable),
                 socketRoot.toFile(),
+            ) +
+            listOfNotNull(
+                File(System.getProperty("java.home"), "conf/security/java.security.d")
+                    .canonicalFile
+                    .takeIf { it.isDirectory },
             )
     return ProcessConfig(
         processId = "native-security-ipc",
@@ -509,7 +558,8 @@ object CageforgeNativeGrandchild {
 /** Child JVM used by the authenticated Cageforge IPC smoke. */
 object CageforgeAuthenticatedIpcProbe {
     @JvmStatic
-    fun main(args: Array<String>) =
+    fun main(args: Array<String>) {
+        writeJavaSecurityDiagnostics()
         runCatching {
             runBlocking {
                 val bootstrap = ChildProcessBootstrap()
@@ -531,9 +581,31 @@ object CageforgeAuthenticatedIpcProbe {
             }
         }.onFailure { error ->
             System.getenv("BOSS_SMOKE_AUTH_DIAG")?.let { diagnostic ->
-                Files.writeString(Path.of(diagnostic), error.stackTraceToString())
+                val previous = runCatching { Files.readString(Path.of(diagnostic)) }.getOrDefault("")
+                Files.writeString(
+                    Path.of(diagnostic),
+                    previous + error.stackTraceToString(),
+                )
             }
         }.getOrThrow()
+    }
+
+    private fun writeJavaSecurityDiagnostics() {
+        val diagnostic = System.getenv("BOSS_SMOKE_AUTH_DIAG") ?: return
+        val javaHome = Path.of(System.getProperty("java.home"))
+        val details =
+            listOf(
+                "java.home=$javaHome",
+                "java.home.exists=${Files.exists(javaHome)}",
+                "java.conf.exists=${Files.exists(javaHome.resolve("conf"))}",
+                "java.security.exists=${Files.exists(javaHome.resolve("conf/security/java.security"))}",
+                "java.security.policy.exists=${
+                    Files.exists(javaHome.resolve("conf/security/policy/unlimited"))
+                }",
+            ).joinToString("\n", postfix = "\n")
+        val previous = runCatching { Files.readString(Path.of(diagnostic)) }.getOrDefault("")
+        Files.writeString(Path.of(diagnostic), previous + details)
+    }
 }
 
 object CageforgeLocalIpcProbe {
@@ -542,15 +614,18 @@ object CageforgeLocalIpcProbe {
         val allowed = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_ALLOWED_SOCKET")))
         val blocked = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_BLOCKED_SOCKET")))
         val result = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_RESULT")))
-        val statuses =
-            buildList {
-                runCatching { connectAndWrite(allowed, 'a') }
-                    .onSuccess { add("allowed-ipc-connected") }
-                    .onFailure { add("allowed-ipc-denied: ${it::class.simpleName}: ${it.message}") }
-                runCatching { connectAndWrite(blocked, 'b') }
-                    .onSuccess { add("blocked-ipc-allowed") }
-                    .onFailure { add("blocked-ipc-denied") }
+        val statuses = mutableListOf<String>()
+        runCatching { connectAndWrite(allowed, 'a') }
+            .onSuccess {
+                statuses += "allowed-ipc-connected"
+                Files.writeString(result, statuses.joinToString("\n"))
+            }.onFailure {
+                statuses += "allowed-ipc-denied: ${it::class.simpleName}: ${it.message}"
+                Files.writeString(result, statuses.joinToString("\n"))
             }
+        runCatching { connectAndWrite(blocked, 'b') }
+            .onSuccess { statuses += "blocked-ipc-allowed" }
+            .onFailure { statuses += "blocked-ipc-denied" }
         Files.writeString(result, statuses.joinToString("\n"))
     }
 
@@ -559,7 +634,16 @@ object CageforgeLocalIpcProbe {
         value: Char,
     ) {
         SocketChannel.open(StandardProtocolFamily.UNIX).use { channel ->
-            channel.connect(UnixDomainSocketAddress.of(path))
+            channel.configureBlocking(false)
+            if (!channel.connect(UnixDomainSocketAddress.of(path))) {
+                Selector.open().use { selector ->
+                    channel.register(selector, SelectionKey.OP_CONNECT)
+                    check(selector.select(2_000) > 0 && channel.finishConnect()) {
+                        "IPC connection timed out: $path"
+                    }
+                }
+            }
+            channel.configureBlocking(true)
             channel.write(ByteBuffer.wrap(byteArrayOf(value.code.toByte())))
         }
     }
