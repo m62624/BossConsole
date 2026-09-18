@@ -37,7 +37,15 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
     val processId = pluginProcessId(input.windowId, manifest.pluginId)
     val localIpcPaths =
         if (input.securityRequired) {
-            protectedLocalIpcPaths(processId)
+            listOf(
+                IpcAddressResolver.kernelAddress(),
+                IpcAddressResolver.resolveAddress("plugin", processId),
+            ).map { address ->
+                require(address.startsWith("unix://")) {
+                    "Protected Cageforge IPC requires a Unix-domain transport on this platform: $address"
+                }
+                address.removePrefix("unix://")
+            }
         } else {
             emptyList()
         }
@@ -66,17 +74,6 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
             },
     )
 }
-
-private fun protectedLocalIpcPaths(processId: String): List<String> =
-    listOf(
-        IpcAddressResolver.kernelAddress(),
-        IpcAddressResolver.resolveAddress("plugin", processId),
-    ).map { address ->
-        require(address.startsWith("unix://")) {
-            "Protected Cageforge IPC requires a Unix-domain transport on this platform: $address"
-        }
-        address.removePrefix("unix://")
-    }
 
 private fun validateWorkDir(projectPath: String): File {
     val requested = File(projectPath.ifEmpty { System.getProperty("user.dir") })
