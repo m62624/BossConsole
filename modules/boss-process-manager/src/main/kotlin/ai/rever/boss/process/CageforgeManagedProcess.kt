@@ -6,7 +6,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Bridges Cageforge's native Java process facade to the existing BOSS process registry.
@@ -18,15 +17,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class CageforgeManagedProcess(
     sandbox: SandboxProcess,
     private val runtime: Cageforge,
-) : Process(), AutoCloseable {
+) : Process() {
     private val delegate = sandbox.asJavaProcess()
-    private val resourcesClosed = AtomicBoolean(false)
 
     @Volatile private var completedExitCode: Int? = null
 
     init {
         delegate.onExit().whenComplete { _, _ ->
             completedExitCode = runCatching { delegate.exitValue() }.getOrNull()
+            runCatching { delegate.close() }
             runCatching { runtime.close() }
         }
     }
@@ -47,15 +46,13 @@ internal class CageforgeManagedProcess(
     override fun exitValue(): Int = completedExitCode ?: delegate.exitValue()
 
     override fun destroy() {
-        if (!resourcesClosed.get() && isAlive) delegate.destroy()
+        if (isAlive) delegate.destroy()
     }
 
     override fun destroyForcibly(): Process {
-        if (!resourcesClosed.get() && isAlive) delegate.destroyForcibly()
+        if (isAlive) delegate.destroyForcibly()
         return this
     }
-
-    override fun isAlive(): Boolean = completedExitCode == null && !resourcesClosed.get() && delegate.isAlive
 
     override fun pid(): Long = delegate.pid()
 
@@ -65,15 +62,4 @@ internal class CageforgeManagedProcess(
         } else {
             delegate.onExit().thenApply { this }
         }
-
-    override fun supportsNormalTermination(): Boolean = delegate.supportsNormalTermination()
-
-    override fun close() = closeNativeResources()
-
-    private fun closeNativeResources() {
-        if (resourcesClosed.compareAndSet(false, true)) {
-            runCatching { delegate.close() }
-            runCatching { runtime.close() }
-        }
-    }
 }
