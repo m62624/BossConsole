@@ -22,8 +22,13 @@ internal class CageforgeManagedProcess(
     private val delegate = sandbox.asJavaProcess()
     private val resourcesClosed = AtomicBoolean(false)
 
+    @Volatile private var completedExitCode: Int? = null
+
     init {
-        delegate.onExit().whenComplete { _, _ -> closeNativeResources() }
+        delegate.onExit().whenComplete { _, _ ->
+            completedExitCode = runCatching { delegate.exitValue() }.getOrNull()
+            runCatching { runtime.close() }
+        }
     }
 
     override fun getOutputStream(): OutputStream = delegate.outputStream
@@ -32,28 +37,34 @@ internal class CageforgeManagedProcess(
 
     override fun getErrorStream(): InputStream = delegate.errorStream
 
-    override fun waitFor(): Int = delegate.waitFor()
+    override fun waitFor(): Int = completedExitCode ?: delegate.waitFor()
 
     override fun waitFor(
         timeout: Long,
         unit: TimeUnit,
-    ): Boolean = delegate.waitFor(timeout, unit)
+    ): Boolean = completedExitCode != null || delegate.waitFor(timeout, unit)
 
-    override fun exitValue(): Int = delegate.exitValue()
+    override fun exitValue(): Int = completedExitCode ?: delegate.exitValue()
 
-    override fun destroy() = delegate.destroy()
+    override fun destroy() {
+        if (!resourcesClosed.get() && isAlive) delegate.destroy()
+    }
 
     override fun destroyForcibly(): Process {
-        delegate.destroyForcibly()
+        if (!resourcesClosed.get() && isAlive) delegate.destroyForcibly()
         return this
     }
 
-    override fun isAlive(): Boolean = delegate.isAlive
+    override fun isAlive(): Boolean = completedExitCode == null && !resourcesClosed.get() && delegate.isAlive
 
     override fun pid(): Long = delegate.pid()
 
     override fun onExit(): CompletableFuture<Process> =
-        delegate.onExit().thenApply { this }
+        if (completedExitCode != null) {
+            CompletableFuture.completedFuture(this)
+        } else {
+            delegate.onExit().thenApply { this }
+        }
 
     override fun supportsNormalTermination(): Boolean = delegate.supportsNormalTermination()
 
