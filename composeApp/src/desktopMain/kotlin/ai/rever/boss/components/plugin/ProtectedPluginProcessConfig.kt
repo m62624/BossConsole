@@ -159,6 +159,7 @@ private fun protectedClasspathRoots(
                     }
                 }.normalize()
         add(javaHome)
+        File(javaHome, "conf").canonicalFile.takeIf { it.isDirectory }?.let(::add)
         File(javaHome, "conf/security").canonicalFile.takeIf { it.isDirectory }?.let(::add)
         add(
             File(ProcessSpawner.findJavaExecutable())
