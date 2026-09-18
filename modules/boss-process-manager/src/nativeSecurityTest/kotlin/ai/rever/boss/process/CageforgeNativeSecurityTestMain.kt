@@ -6,6 +6,7 @@ import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder
 import org.junit.platform.launcher.core.LauncherFactory
 import org.junit.platform.launcher.listeners.SummaryGeneratingListener
 import java.io.PrintWriter
+import kotlin.system.exitProcess
 
 /** Runs the BOSS native smoke without requiring Gradle inside the restricted guest. */
 object CageforgeNativeSecurityTestMain {
@@ -32,8 +33,10 @@ object CageforgeNativeSecurityTestMain {
                 failure.exception.printStackTrace(errorWriter)
             }
         }
-        check(listener.summary.totalFailureCount == 0L) {
-            "native security smoke reported ${listener.summary.totalFailureCount} failure(s)"
-        }
+        val exitCode = if (listener.summary.totalFailureCount == 0L) 0 else 1
+        // This is a dedicated process runner, not the long-lived BOSS application. The IPC
+        // transport owns native event-loop threads for the duration of the test process, so
+        // terminate the runner explicitly after the launcher has finished and flushed its result.
+        exitProcess(exitCode)
     }
 }
