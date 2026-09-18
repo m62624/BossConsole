@@ -42,69 +42,105 @@ data class CageforgeProcessPolicy(
                     .distinctBy { it.path }
 
             val ipcPaths = localIpcPaths.map(::validatedLocalIpcPath).distinct()
+            val ipcParentRoots = ipcPaths.map(::localIpcParent).distinctBy { it.path }
+            val effectiveReadOnlyRoots = additionalRoots.filterNot { it in ipcParentRoots }
+            val filesystemRules = filesystemRules(effectiveReadOnlyRoots, ipcParentRoots)
 
-            fun tomlString(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+            return CageforgeProcessPolicy(
+                renderWorkspacePolicy(root, filesystemRules, ipcPaths),
+                "boss-protected",
+            )
+        }
 
+        private fun filesystemRules(
+            readOnlyRoots: List<File>,
+            ipcParentRoots: List<File>,
+        ): List<String> =
+            buildList {
+                addAll(
+                    ipcParentRoots.map { path ->
+                        "  { target = \"absolute\", path = ${tomlString(path.path)}, access = \"write\" }"
+                    },
+                )
+                addAll(
+                    readOnlyRoots.map { path ->
+                        "  { target = \"absolute\", path = ${tomlString(path.path)}, access = \"read\" }"
+                    },
+                )
+            }
+
+        private fun renderWorkspacePolicy(
+            root: File,
+            filesystemRules: List<String>,
+            ipcPaths: List<String>,
+        ): String {
             val rootText = tomlString(root.path)
-            val runtimeRules =
-                additionalRoots.joinToString(",\n") { path ->
-                    "  { target = \"absolute\", path = ${tomlString(path.path)}, access = \"read\" }"
-                }
-            val runtimeRulesText = if (runtimeRules.isEmpty()) "" else "$runtimeRules,\n"
-            val networkPolicy =
+            val allFilesystemRules =
+                buildList {
+                    add("  { target = \"minimal\", access = \"read\" }")
+                    addAll(filesystemRules)
+                    add("  { target = \"workspace-root\", access = \"write\" }")
+                }.joinToString(",\n")
+            val networkPolicy = renderNetworkPolicy(ipcPaths)
+            return buildString {
+                appendLine("default_profile = \"boss-protected\"")
+                appendLine()
+                appendLine("[profiles.boss-protected]")
+                appendLine("description = \"BOSS protected child process\"")
+                appendLine()
+                appendLine("[profiles.boss-protected.workspace_roots]")
+                appendLine("$rootText = true")
+                appendLine()
+                appendLine("[profiles.boss-protected.filesystem]")
+                appendLine("mode = \"restricted\"")
+                appendLine("glob_scan_max_depth = 8")
+                appendLine("additional_protected_paths = [\".git\", \".env\", \".ssh\"]")
+                appendLine("rules = [")
+                appendLine(allFilesystemRules)
+                appendLine("]")
+                appendLine()
+                appendLine(networkPolicy)
+                appendLine()
+                appendLine("[profiles.boss-protected.command]")
+                appendLine("program = \"java\"")
+                appendLine("working_directory = \".\"")
+                appendLine()
+                appendLine("[profiles.boss-protected.command.stdio]")
+                appendLine("stdin = \"pipe\"")
+                appendLine("stdout = \"pipe\"")
+                appendLine("stderr = \"pipe\"")
+            }
+        }
+
+        private fun renderNetworkPolicy(ipcPaths: List<String>): String {
+            val lines =
                 if (ipcPaths.isEmpty()) {
-                    """
-                    [profiles.boss-protected.network]
-                    mode = "disabled"
-                    """.trimIndent()
+                    listOf(
+                        "[profiles.boss-protected.network]",
+                        "mode = \"disabled\"",
+                    )
                 } else {
                     val socketRules =
                         ipcPaths.joinToString(",\n") { path ->
                             "  { path = ${tomlString(path)}, access = \"allow\" }"
                         }
-                    """
-                    [profiles.boss-protected.network]
-                    mode = "enabled"
-                    domain_mode = "restricted"
-                    unix_socket_mode = "restricted"
-                    local_network_access = "deny"
-                    unix_sockets = [
-                    $socketRules,
-                    ]
-                    """.trimIndent()
+                    listOf(
+                        "[profiles.boss-protected.network]",
+                        "mode = \"enabled\"",
+                        "domain_mode = \"restricted\"",
+                        "unix_socket_mode = \"restricted\"",
+                        "local_network_access = \"deny\"",
+                        "unix_sockets = [",
+                        socketRules,
+                        "]",
+                    )
                 }
-            val toml =
-                """
-                default_profile = "boss-protected"
+            return lines.joinToString("\n")
+        }
 
-                [profiles.boss-protected]
-                description = "BOSS protected child process"
-
-                [profiles.boss-protected.workspace_roots]
-                $rootText = true
-
-                [profiles.boss-protected.filesystem]
-                mode = "restricted"
-                glob_scan_max_depth = 8
-                additional_protected_paths = [".git", ".env", ".ssh"]
-                rules = [
-                  { target = "minimal", access = "read" },
-                $runtimeRulesText  { target = "workspace-root", access = "write" },
-                ]
-
-                $networkPolicy
-
-                [profiles.boss-protected.command]
-                program = "java"
-                working_directory = "."
-
-                [profiles.boss-protected.command.stdio]
-                stdin = "pipe"
-                stdout = "pipe"
-                stderr = "pipe"
-                """.trimIndent() + "\n"
-
-            return CageforgeProcessPolicy(toml, "boss-protected")
+        private fun tomlString(value: String): String {
+            val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+            return "\"$escaped\""
         }
 
         private fun validatedLocalIpcPath(value: String): String {
@@ -117,6 +153,16 @@ data class CageforgeProcessPolicy(
             val path = File(value)
             require(path.isAbsolute) { "Cageforge local IPC path must be absolute: ${path.path}" }
             return path.canonicalFile.path
+        }
+
+        private fun localIpcParent(path: String): File {
+            val parent =
+                File(path).parentFile?.canonicalFile
+                    ?: error("Cageforge local IPC path must have a parent directory: $path")
+            require(parent.isDirectory) {
+                "Cageforge local IPC parent must be an existing directory: ${parent.path}"
+            }
+            return parent
         }
     }
 }
