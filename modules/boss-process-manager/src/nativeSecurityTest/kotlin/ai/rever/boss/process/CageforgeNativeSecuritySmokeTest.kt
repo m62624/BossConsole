@@ -1,5 +1,16 @@
 package ai.rever.boss.process
 
+import ai.rever.boss.ipc.BossIpcServer
+import ai.rever.boss.ipc.ChildProcessBootstrap
+import ai.rever.boss.ipc.IpcAddressResolver
+import ai.rever.boss.ipc.auth.IpcTlsIdentity
+import ai.rever.boss.ipc.auth.ProcessTokenRegistry
+import ai.rever.boss.ipc.proto.ProcessManifest
+import ai.rever.boss.ipc.proto.StateKey
+import ai.rever.boss.ipc.proto.StateServiceGrpcKt
+import ai.rever.boss.ipc.services.KernelServiceImpl
+import ai.rever.boss.ipc.services.StateServiceImpl
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -19,6 +30,59 @@ import kotlin.io.path.createDirectories
 
 /** Representative BOSS-side native smoke; the complete backend suite remains in Cageforge CI. */
 class CageforgeNativeSecuritySmokeTest {
+    @Test
+    fun nativeProcessRegistersThroughAuthenticatedLocalIpc() {
+        val workspace = Files.createTempDirectory("boss-cageforge-auth-")
+        val logs = Files.createTempDirectory("boss-cageforge-auth-logs-")
+        val kernelAddress = IpcAddressResolver.kernelAddress()
+        val processId = "native-security-auth"
+        val processAddress = IpcAddressResolver.resolveAddress("plugin", processId)
+        var server: BossIpcServer? = null
+        var managed: ManagedProcess? = null
+        try {
+            if (isWindows()) {
+                assertThrowsUnsupportedLocalIpc(workspace, workspace.resolve("unsupported.sock"))
+                return
+            }
+
+            val kernel = startAuthenticatedKernel(kernelAddress)
+            server = kernel.server
+            val config = authenticatedIpcConfig(workspace, processId, kernelAddress, processAddress)
+
+            managed =
+                ProcessSpawner(
+                    kernelAddress,
+                    logs.toFile(),
+                    tokenRegistry = kernel.tokens,
+                    kernelIdentity = kernel.identity,
+                ).spawn(config)
+            assertTrue(
+                managed.process.waitFor(10, TimeUnit.MILLISECONDS).not(),
+                "authenticated child exited before readiness",
+            )
+            awaitAuthenticatedRegistration(
+                kernel.service,
+                managed.process,
+                logs,
+                workspace.resolve("auth-diag.txt"),
+            )
+            val client = checkNotNull(managed.ipcClient) { "Cageforge child has no authenticated IPC client" }
+            runBlocking {
+                assertTrue(client.waitForReady(10_000), "authenticated child service did not become ready")
+                val state =
+                    StateServiceGrpcKt
+                        .StateServiceCoroutineStub(client.channel)
+                        .getState(StateKey.newBuilder().setKey("ready").build())
+                assertEquals("ready", state.key)
+            }
+        } finally {
+            managed?.let { terminateAfterTest(it.process) }
+            server?.stop()
+            logs.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun nativeProcessCanReachOnlyAnExplicitlyAllowedLocalIpcEndpoint() {
         val workspace = Files.createTempDirectory("boss-cageforge-ipc-")
@@ -208,6 +272,109 @@ class CageforgeNativeSecuritySmokeTest {
     }
 }
 
+private fun awaitAuthenticatedRegistration(
+    service: KernelServiceImpl,
+    process: Process,
+    logs: Path,
+    diagnosticPath: Path,
+) {
+    repeat(200) {
+        if (service.registeredCount == 1) return
+        if (!process.isAlive) return@repeat
+        Thread.sleep(50)
+    }
+    if (service.registeredCount != 1) {
+        Thread.sleep(250)
+        val stdout = readDiagnosticLog(logs, "stdout")
+        val stderr = readDiagnosticLog(logs, "stderr")
+        val childDiagnostic =
+            runCatching { Files.readString(diagnosticPath).takeLast(8_000) }
+                .getOrDefault("<unavailable: $diagnosticPath>")
+        error(
+            "authenticated child registration did not complete: alive=${process.isAlive}, " +
+                "exit=${runCatching { process.exitValue() }.getOrDefault("running")}\n" +
+                "stdout=$stdout\nstderr=$stderr\nchild=$childDiagnostic",
+        )
+    }
+}
+
+private fun readDiagnosticLog(
+    root: Path,
+    streamName: String,
+): String =
+    runCatching {
+        Files
+            .walk(root)
+            .use { paths ->
+                val files = mutableListOf<Path>()
+                paths.forEach { path ->
+                    if (
+                        path.fileName.toString().startsWith("$streamName.") ||
+                        path.fileName.toString() == "$streamName.log"
+                    ) {
+                        files.add(path)
+                    }
+                }
+                val contents = files.sorted().joinToString("\n") { Files.readString(it) }
+                contents.takeLast(8_000)
+            }
+    }.getOrDefault("<unavailable: $root/$streamName>")
+
+private data class AuthenticatedKernel(
+    val server: BossIpcServer,
+    val service: KernelServiceImpl,
+    val tokens: ProcessTokenRegistry,
+    val identity: IpcTlsIdentity,
+)
+
+private fun startAuthenticatedKernel(address: String): AuthenticatedKernel {
+    val tokens = ProcessTokenRegistry()
+    val identity = IpcTlsIdentity.create()
+    val service = KernelServiceImpl()
+    val server = BossIpcServer(address, tokens, identity).addService(service).start()
+    return AuthenticatedKernel(server, service, tokens, identity)
+}
+
+private fun authenticatedIpcConfig(
+    workspace: Path,
+    processId: String,
+    kernelAddress: String,
+    processAddress: String,
+): ProcessConfig {
+    val classpath = System.getProperty("java.class.path")
+    val javaExecutable = ProcessSpawner.findJavaExecutable()
+    val readRoots =
+        classpath
+            .split(File.pathSeparator)
+            .filter { it.isNotBlank() }
+            .map(::File) +
+            listOf(
+                File(System.getProperty("java.home")),
+                File(System.getProperty("java.home"), "conf/security").canonicalFile,
+                File(javaExecutable),
+            )
+    return ProcessConfig(
+        processId = processId,
+        processType = ProcessType.PLUGIN,
+        displayName = "Cageforge authenticated IPC smoke",
+        mainClass = CageforgeAuthenticatedIpcProbe::class.java.name,
+        classpath = classpath,
+        workDir = workspace.toFile(),
+        jvmArgs = listOf("-Dio.netty.native.workdir=${workspace.toAbsolutePath()}"),
+        environment = mapOf("BOSS_SMOKE_AUTH_DIAG" to workspace.resolve("auth-diag.txt").toString()),
+        cageforge =
+            CageforgeProcessPolicy.workspace(
+                workspace.toFile(),
+                readRoots,
+                localIpcPaths =
+                    listOf(
+                        kernelAddress.removePrefix("unix://"),
+                        processAddress.removePrefix("unix://"),
+                    ),
+            ),
+    )
+}
+
 private fun createLocalIpcConfig(
     workspace: Path,
     socketRoot: Path,
@@ -335,6 +502,36 @@ object CageforgeNativeGrandchild {
         Files.writeString(marker, "created")
         println("grandchild-ready")
     }
+}
+
+/** Child JVM used by the authenticated Cageforge IPC smoke. */
+object CageforgeAuthenticatedIpcProbe {
+    @JvmStatic
+    fun main(args: Array<String>) =
+        runCatching {
+            runBlocking {
+                val bootstrap = ChildProcessBootstrap()
+                val manifest =
+                    ProcessManifest
+                        .newBuilder()
+                        .setProcessId(bootstrap.processId)
+                        .setDisplayName("Authenticated Cageforge IPC probe")
+                        .setProcessType(ai.rever.boss.ipc.proto.ProcessType.PROCESS_TYPE_PLUGIN)
+                        .setVersion("1.0.0")
+                        .build()
+                val connection = bootstrap.connect(manifest)
+                try {
+                    connection.processServer.addService(StateServiceImpl())
+                    connection.startServer().awaitTermination()
+                } finally {
+                    connection.shutdown()
+                }
+            }
+        }.onFailure { error ->
+            System.getenv("BOSS_SMOKE_AUTH_DIAG")?.let { diagnostic ->
+                Files.writeString(Path.of(diagnostic), error.stackTraceToString())
+            }
+        }.getOrThrow()
 }
 
 object CageforgeLocalIpcProbe {
