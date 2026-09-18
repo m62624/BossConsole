@@ -153,7 +153,7 @@ stop_guest() {
     # Flush the bootstrap marker and package state before asking systemd to power off.
     # The next restricted boot reuses this overlay; killing QEMU with dirty state can
     # lose the marker and make cloud-init retry package setup without network access.
-    ssh_guest 'sudo sync; sudo poweroff' >/dev/null 2>&1 || true
+    ssh_guest 'sudo sync; sudo systemctl poweroff --no-block' >/dev/null 2>&1 || true
     # Give systemd a bounded grace period to flush the guest before force-killing QEMU.
     for _ in {1..30}; do
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
