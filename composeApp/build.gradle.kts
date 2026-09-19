@@ -918,6 +918,7 @@ kotlin {
                             "**/plugin/PluginProcessSession.kt",
                             "**/plugin/PluginStateBridge.kt",
                             "**/plugin/ProtectedPluginProcessConfig.kt",
+                            "**/plugin/ProtectedPluginIpcEndpoint.kt",
                         )
                     }
                 }
