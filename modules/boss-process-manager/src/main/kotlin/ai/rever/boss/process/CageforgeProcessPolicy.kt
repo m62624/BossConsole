@@ -74,117 +74,17 @@ data class CageforgeProcessPolicy(
             validateEndpointPlatform(unixSocketPaths, namedPipeNames)
             val ipcParentRoots = unixSocketPaths.map(::localIpcParent).distinctBy { it.path }
             val effectiveReadOnlyRoots = additionalRoots.filterNot { it in ipcParentRoots }
-            val filesystemRules = filesystemRules(effectiveReadOnlyRoots, ipcParentRoots)
 
             return CageforgeProcessPolicy(
-                renderWorkspacePolicy(root, filesystemRules, unixSocketPaths, namedPipeNames),
-                "boss-protected",
+                CageforgeTomlBuilder.build(
+                    root = root,
+                    readOnlyRoots = effectiveReadOnlyRoots,
+                    ipcParentRoots = ipcParentRoots,
+                    unixSocketPaths = unixSocketPaths,
+                    namedPipeNames = namedPipeNames,
+                ),
+                CAGEFORGE_PROFILE_NAME,
             )
-        }
-
-        private fun filesystemRules(
-            readOnlyRoots: List<File>,
-            ipcParentRoots: List<File>,
-        ): List<String> =
-            buildList {
-                addAll(
-                    ipcParentRoots.map { path ->
-                        "  { target = \"absolute\", path = ${tomlString(path.path)}, access = \"write\" }"
-                    },
-                )
-                addAll(
-                    readOnlyRoots.map { path ->
-                        "  { target = \"absolute\", path = ${tomlString(path.path)}, access = \"read\" }"
-                    },
-                )
-            }
-
-        private fun renderWorkspacePolicy(
-            root: File,
-            filesystemRules: List<String>,
-            unixSocketPaths: List<String>,
-            namedPipeNames: List<String>,
-        ): String {
-            val rootText = tomlString(root.path)
-            val allFilesystemRules =
-                buildList {
-                    add("  { target = \"minimal\", access = \"read\" }")
-                    addAll(filesystemRules)
-                    add("  { target = \"workspace-root\", access = \"write\" }")
-                }.joinToString(",\n")
-            val networkPolicy = renderNetworkPolicy()
-            val localIpcPolicy = renderLocalIpcPolicy(unixSocketPaths, namedPipeNames)
-            return buildString {
-                appendLine("default_profile = \"boss-protected\"")
-                appendLine()
-                appendLine("[profiles.boss-protected]")
-                appendLine("description = \"BOSS protected child process\"")
-                appendLine()
-                appendLine("[profiles.boss-protected.workspace_roots]")
-                appendLine("$rootText = true")
-                appendLine()
-                appendLine("[profiles.boss-protected.filesystem]")
-                appendLine("mode = \"restricted\"")
-                appendLine("glob_scan_max_depth = 8")
-                appendLine("additional_protected_paths = [\".git\", \".env\", \".ssh\"]")
-                appendLine("rules = [")
-                appendLine(allFilesystemRules)
-                appendLine("]")
-                appendLine()
-                appendLine(networkPolicy)
-                appendLine()
-                appendLine(localIpcPolicy)
-                appendLine()
-                appendLine("[profiles.boss-protected.command]")
-                appendLine("program = \"java\"")
-                appendLine("working_directory = \".\"")
-                appendLine()
-                appendLine("[profiles.boss-protected.command.stdio]")
-                appendLine("stdin = \"pipe\"")
-                appendLine("stdout = \"pipe\"")
-                appendLine("stderr = \"pipe\"")
-            }
-        }
-
-        private fun renderNetworkPolicy(): String =
-            listOf(
-                "[profiles.boss-protected.network]",
-                "mode = \"disabled\"",
-            ).joinToString("\n")
-
-        private fun renderLocalIpcPolicy(
-            unixSocketPaths: List<String>,
-            namedPipeNames: List<String>,
-        ): String {
-            if (unixSocketPaths.isEmpty() && namedPipeNames.isEmpty()) return ""
-            val platform = currentPlatform()
-            return when (platform) {
-                Platform.LINUX,
-                Platform.MACOS,
-                -> {
-                    require(namedPipeNames.isEmpty()) {
-                        "Windows named-pipe endpoints cannot be used on $platform"
-                    }
-                    val sockets = unixSocketPaths.joinToString(", ") { tomlString(it) }
-                    val platformName = platform.tomlName
-                    "[profiles.boss-protected.platforms.$platformName.local_ipc]\n" +
-                        "unix_sockets = [$sockets]"
-                }
-
-                Platform.WINDOWS -> {
-                    require(unixSocketPaths.isEmpty()) {
-                        "Unix-socket endpoints cannot be used on Windows"
-                    }
-                    val pipes = namedPipeNames.joinToString(", ") { tomlString(it) }
-                    "[profiles.boss-protected.platforms.windows.local_ipc]\n" +
-                        "named_pipes = [$pipes]"
-                }
-            }
-        }
-
-        private fun tomlString(value: String): String {
-            val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
-            return "\"$escaped\""
         }
 
         private fun validatedUnixSocketPath(value: String): String {
@@ -211,16 +111,16 @@ data class CageforgeProcessPolicy(
             unixSocketPaths: List<String>,
             namedPipeNames: List<String>,
         ) {
-            when (currentPlatform()) {
-                Platform.LINUX,
-                Platform.MACOS,
+            when (CageforgePlatform.current()) {
+                CageforgePlatform.LINUX,
+                CageforgePlatform.MACOS,
                 -> {
                     require(namedPipeNames.isEmpty()) {
                         "Windows named-pipe endpoints are unsupported on this platform"
                     }
                 }
 
-                Platform.WINDOWS -> {
+                CageforgePlatform.WINDOWS -> {
                     require(unixSocketPaths.isEmpty()) {
                         "Unix-socket endpoints are unsupported on Windows"
                     }
@@ -237,24 +137,6 @@ data class CageforgeProcessPolicy(
             }
             return parent
         }
-    }
-}
-
-private enum class Platform(
-    val tomlName: String,
-) {
-    LINUX("linux"),
-    MACOS("macos"),
-    WINDOWS("windows"),
-}
-
-private fun currentPlatform(): Platform {
-    val osName = System.getProperty("os.name").lowercase()
-    return when {
-        osName.contains("windows") -> Platform.WINDOWS
-        osName.contains("mac") -> Platform.MACOS
-        osName.contains("linux") -> Platform.LINUX
-        else -> error("Cageforge protected local IPC is unsupported on $osName")
     }
 }
 

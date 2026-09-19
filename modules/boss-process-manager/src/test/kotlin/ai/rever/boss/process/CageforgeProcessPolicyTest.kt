@@ -48,8 +48,9 @@ class CageforgeProcessPolicyTest {
         try {
             val kernelSocket = workspace.resolve("boss-kernel.sock")
             val processSocket = workspace.resolve("boss-plugin.sock")
+            val platform = CageforgePlatform.current()
             val endpoints =
-                if (isWindows()) {
+                if (platform == CageforgePlatform.WINDOWS) {
                     listOf(
                         CageforgeLocalIpcEndpoint.WindowsNamedPipe("\\\\.\\pipe\\boss-kernel"),
                         CageforgeLocalIpcEndpoint.WindowsNamedPipe("\\\\.\\pipe\\boss-plugin"),
@@ -68,9 +69,9 @@ class CageforgeProcessPolicyTest {
 
             assertTrue("mode = \"disabled\"" in policy.toml)
             assertTrue(
-                "[profiles.boss-protected.platforms.${platformOverlayName()}.local_ipc]" in policy.toml,
+                "[profiles.boss-protected.platforms.${platform.tomlName}.local_ipc]" in policy.toml,
             )
-            if (isWindows()) {
+            if (platform == CageforgePlatform.WINDOWS) {
                 assertTrue("named_pipes = [" in policy.toml)
                 assertTrue("boss-kernel" in policy.toml)
                 assertTrue("boss-plugin" in policy.toml)
@@ -90,15 +91,6 @@ class CageforgeProcessPolicyTest {
             workspace.toFile().deleteRecursively()
         }
     }
-
-    private fun platformOverlayName(): String =
-        when {
-            System.getProperty("os.name").contains("Windows", ignoreCase = true) -> "windows"
-            System.getProperty("os.name").contains("Mac", ignoreCase = true) -> "macos"
-            else -> "linux"
-        }
-
-    private fun isWindows(): Boolean = System.getProperty("os.name").contains("Windows", ignoreCase = true)
 
     @Test
     fun `windows named pipe namespace is validated before policy lowering`() {
