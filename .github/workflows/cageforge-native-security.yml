@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, develop, dev]
     paths:
+      - 'modules/boss-ipc/**'
       - 'modules/boss-process-manager/**'
       - 'composeApp/build.gradle.kts'
       - 'composeApp/src/commonMain/kotlin/ai/rever/boss/components/plugin/DynamicPluginManager.kt'
@@ -22,6 +23,7 @@ on:
   pull_request:
     branches: [main, dev]
     paths:
+      - 'modules/boss-ipc/**'
       - 'modules/boss-process-manager/**'
       - 'composeApp/build.gradle.kts'
       - 'composeApp/src/commonMain/kotlin/ai/rever/boss/components/plugin/DynamicPluginManager.kt'
@@ -221,10 +223,9 @@ jobs:
       # The first protected launch may invoke Cageforge WindowsSetup and its
       # owner-scoped UAC provisioning. Subsequent launches reuse the verified
       # setup; any provisioning failure fails this native lane.
-      # The BOSS IPC resolver still uses TCP on Windows. The native tests therefore
-      # verify the Windows Cageforge policy shape and the protected launch's
-      # fail-closed rejection of that legacy transport; they must not claim a
-      # named-pipe BOSS transport until the IPC module provides one.
+      # The BOSS IPC resolver uses the same Windows named-pipe transport as the
+      # protected policy. The smoke must therefore prove both allowed and denied
+      # named-pipe access after the explicit Cageforge setup is ready.
       - name: Run native security smoke
         run: |
           ./gradlew \
