@@ -83,6 +83,9 @@ val nativeSecurityTestBundle =
         archiveFileName.set("boss-native-security-test-bundle.tar.gz")
         destinationDirectory.set(layout.buildDirectory.dir("nativeSecurityTest"))
         compression = Compression.GZIP
+        val qemuLauncher = rootProject.file("ci/cageforge-qemu-suite/run.sh")
+        inputs.files(nativeSecurityTestSourceSet.runtimeClasspath)
+        inputs.file(qemuLauncher)
         dependsOn(nativeSecurityTestSourceSet.classesTaskName)
         from(sourceSets.main.get().output) {
             into("classes")
@@ -95,7 +98,7 @@ val nativeSecurityTestBundle =
         }) {
             into("lib")
         }
-        from(rootProject.file("ci/cageforge-qemu-suite/run.sh")) {
+        from(qemuLauncher) {
             into("ci/cageforge-qemu-suite")
         }
     }

@@ -135,6 +135,20 @@ jobs:
             --max-workers=2 \
             --console=plain
 
+      - name: Verify native security test bundle
+        run: |
+          set -euo pipefail
+          bundle="modules/boss-process-manager/build/nativeSecurityTest/boss-native-security-test-bundle.tar.gz"
+          test -s "$bundle"
+          launcher="$(tar -tzf "$bundle" | grep -Fx 'ci/cageforge-qemu-suite/run.sh')"
+          test -n "$launcher"
+          ipc_jar="$(tar -tzf "$bundle" | grep -E '^lib/boss-ipc-[^/]+\.jar$' | head -n 1)"
+          test -n "$ipc_jar"
+          extracted_ipc_jar="$RUNNER_TEMP/boss-ipc-bundle-verification.jar"
+          tar -xOzf "$bundle" "$ipc_jar" > "$extracted_ipc_jar"
+          jar tf "$extracted_ipc_jar" | grep -Fx 'ai/rever/boss/ipc/IpcAddressResolver.class'
+          tar -xOzf "$bundle" "$launcher" | grep -F 'classpath_entries=' >/dev/null
+
       - name: Stage native security test bundle
         run: |
           cp \
