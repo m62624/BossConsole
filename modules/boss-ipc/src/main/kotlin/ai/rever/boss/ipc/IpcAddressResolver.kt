@@ -21,7 +21,8 @@ import java.net.URI
  * On macOS/Linux: Uses Unix domain sockets for zero-overhead local IPC.
  * On Windows: Uses named pipes in the local `\\.\pipe\` namespace.
  *
- * UDS path convention: $BOSS_DATA_DIR/ipc/boss-{type}-{id}.sock
+ * Unix-socket path convention: $BOSS_DATA_DIR/ipc/boss-{type}-{id}.sock.
+ * Windows named-pipe convention: `\\.\pipe\boss-{type}-{id}`.
  */
 object IpcAddressResolver {
     private val logger = LoggerFactory.getLogger(IpcAddressResolver::class.java)
