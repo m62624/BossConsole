@@ -221,6 +221,10 @@ jobs:
       # The first protected launch may invoke Cageforge WindowsSetup and its
       # owner-scoped UAC provisioning. Subsequent launches reuse the verified
       # setup; any provisioning failure fails this native lane.
+      # The BOSS IPC resolver still uses TCP on Windows. The native tests therefore
+      # verify the Windows Cageforge policy shape and the protected launch's
+      # fail-closed rejection of that legacy transport; they must not claim a
+      # named-pipe BOSS transport until the IPC module provides one.
       - name: Run native security smoke
         run: |
           ./gradlew \
