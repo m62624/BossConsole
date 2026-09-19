@@ -42,11 +42,6 @@ class CageforgeNativeSecuritySmokeTest {
         var server: BossIpcServer? = null
         var managed: ManagedProcess? = null
         try {
-            if (isWindows()) {
-                assertThrowsUnsupportedLocalIpc(workspace, workspace.resolve("unsupported.sock"))
-                return
-            }
-
             val kernel = startAuthenticatedKernel(kernelAddress)
             server = kernel.server
             val config = authenticatedIpcConfig(workspace, processId, kernelAddress, processAddress)
@@ -98,7 +93,7 @@ class CageforgeNativeSecuritySmokeTest {
         var managed: ManagedProcess? = null
         try {
             if (isWindows()) {
-                assertThrowsUnsupportedLocalIpc(workspace, allowedSocket)
+                CageforgeWindowsNativeSecuritySupport.runLocalIpcSmoke(workspace, logs, result)
                 return
             }
 
@@ -400,10 +395,9 @@ private fun authenticatedIpcConfig(
             CageforgeProcessPolicy.workspace(
                 workspace.toFile(),
                 readRoots,
-                localIpcPaths =
-                    listOf(
-                        kernelAddress.removePrefix("unix://"),
-                        processAddress.removePrefix("unix://"),
+                localIpcEndpoints =
+                    listOf(kernelAddress, processAddress).map(
+                        ::nativeLocalIpcEndpoint,
                     ),
             ),
     )
@@ -481,23 +475,6 @@ private fun readSocketByte(server: ServerSocketChannel?): Byte {
         while (buffer.hasRemaining()) check(client.read(buffer) >= 0) { "local IPC client closed early" }
         buffer.array().single()
     }
-}
-
-private fun assertThrowsUnsupportedLocalIpc(
-    workspace: Path,
-    endpoint: Path,
-) {
-    val error =
-        runCatching {
-            CageforgeProcessPolicy.workspace(
-                workspace.toFile(),
-                localIpcPaths = listOf(endpoint.toString()),
-            )
-        }.exceptionOrNull()
-    assertTrue(
-        error is IllegalArgumentException && error.message.orEmpty().contains("unsupported"),
-        "Windows protected local IPC must fail closed: $error",
-    )
 }
 
 private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
@@ -605,47 +582,6 @@ object CageforgeAuthenticatedIpcProbe {
             ).joinToString("\n", postfix = "\n")
         val previous = runCatching { Files.readString(Path.of(diagnostic)) }.getOrDefault("")
         Files.writeString(Path.of(diagnostic), previous + details)
-    }
-}
-
-object CageforgeLocalIpcProbe {
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val allowed = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_ALLOWED_SOCKET")))
-        val blocked = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_BLOCKED_SOCKET")))
-        val result = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_RESULT")))
-        val statuses = mutableListOf<String>()
-        runCatching { connectAndWrite(allowed, 'a') }
-            .onSuccess {
-                statuses += "allowed-ipc-connected"
-                Files.writeString(result, statuses.joinToString("\n"))
-            }.onFailure {
-                statuses += "allowed-ipc-denied: ${it::class.simpleName}: ${it.message}"
-                Files.writeString(result, statuses.joinToString("\n"))
-            }
-        runCatching { connectAndWrite(blocked, 'b') }
-            .onSuccess { statuses += "blocked-ipc-allowed" }
-            .onFailure { statuses += "blocked-ipc-denied" }
-        Files.writeString(result, statuses.joinToString("\n"))
-    }
-
-    private fun connectAndWrite(
-        path: Path,
-        value: Char,
-    ) {
-        SocketChannel.open(StandardProtocolFamily.UNIX).use { channel ->
-            channel.configureBlocking(false)
-            if (!channel.connect(UnixDomainSocketAddress.of(path))) {
-                Selector.open().use { selector ->
-                    channel.register(selector, SelectionKey.OP_CONNECT)
-                    check(selector.select(2_000) > 0 && channel.finishConnect()) {
-                        "IPC connection timed out: $path"
-                    }
-                }
-            }
-            channel.configureBlocking(true)
-            channel.write(ByteBuffer.wrap(byteArrayOf(value.code.toByte())))
-        }
     }
 }
 
