@@ -2,6 +2,7 @@ import org.gradle.api.tasks.bundling.Compression
 import org.gradle.api.tasks.bundling.Tar
 import org.gradle.api.tasks.testing.Test
 import java.nio.file.Files
+import java.nio.file.Path
 
 plugins {
     alias(libs.plugins.kotlinJvm)
@@ -111,7 +112,16 @@ tasks.withType<Test>().configureEach {
         testHome.deleteRecursively()
         testHome.mkdirs()
         // A short isolated directory keeps actual Unix socket names below the platform limit.
-        systemProperty("boss.data.dir", Files.createTempDirectory("bs").toString())
+        val temporaryRoot =
+            if (
+                !System.getProperty("os.name").startsWith("Windows", ignoreCase = true) &&
+                Files.isDirectory(Path.of(File.separator, "tmp"))
+            ) {
+                Path.of(File.separator, "tmp")
+            } else {
+                Path.of(System.getProperty("java.io.tmpdir"))
+            }
+        systemProperty("boss.data.dir", Files.createTempDirectory(temporaryRoot, "bs").toString())
         systemProperty("boss.test.classpath", classpath.asPath)
     }
 }
