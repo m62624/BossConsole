@@ -61,6 +61,7 @@ dependencies {
 
     // gRPC Netty transport (supports Unix domain sockets)
     implementation(libs.grpc.netty)
+    implementation(libs.jna.platform)
     implementation(libs.bouncycastle.pkix)
 
     // MutableHandlerRegistry, for adding a service to an already-running server

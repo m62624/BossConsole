@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION") // Netty EventLoopGroup constructors deprecated in 4.2.x, required for UDS transport
-
 package ai.rever.boss.ipc
 
 import io.grpc.netty.NettyChannelBuilder
@@ -16,13 +14,12 @@ import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Resolves IPC addresses for inter-process communication.
  *
  * On macOS/Linux: Uses Unix domain sockets for zero-overhead local IPC.
- * On Windows: Falls back to TCP localhost.
+ * On Windows: Uses named pipes in the local `\\.\pipe\` namespace.
  *
  * UDS path convention: $BOSS_DATA_DIR/ipc/boss-{type}-{id}.sock
  */
@@ -50,18 +47,6 @@ object IpcAddressResolver {
         File(bossDataDir, "ipc").also { it.mkdirs() }
     }
 
-    /** TCP port range for Windows fallback */
-    private const val TCP_PORT_BASE = 57000
-    private const val TCP_PORT_RANGE = 100
-
-    /**
-     * Cache of allocated TCP ports per process identity (processType:processId).
-     * Once a port is allocated for a given process, the same port is returned on
-     * subsequent calls, avoiding TOCTOU races where the port could be taken between
-     * discovery and actual bind in the server builder.
-     */
-    private val tcpPortCache = ConcurrentHashMap<String, Int>()
-
     /** Regex for valid process identifiers — prevents path traversal in socket names. */
     private val PROCESS_ID_REGEX = Regex("^[a-zA-Z0-9._-]+$")
 
@@ -74,7 +59,7 @@ object IpcAddressResolver {
 
     /**
      * Get the IPC address for a process.
-     * Returns a UDS path on macOS/Linux, or TCP localhost address on Windows.
+     * Returns a UDS path on macOS/Linux, or a named-pipe address on Windows.
      *
      * @throws IllegalArgumentException if processType or processId contain invalid characters.
      */
@@ -85,9 +70,7 @@ object IpcAddressResolver {
         validateProcessIdentifier(processType)
         validateProcessIdentifier(processId)
         return if (isWindows) {
-            val key = "$processType:$processId"
-            val port = tcpPortCache.computeIfAbsent(key) { findAvailableTcpPort() }
-            "tcp://localhost:$port"
+            "pipe://\\\\.\\pipe\\boss-$processType-$processId"
         } else {
             val socketFile = File(ipcDir, "boss-$processType-$processId.sock")
             "unix://${socketFile.absolutePath}"
@@ -112,6 +95,15 @@ object IpcAddressResolver {
             address.startsWith("unix://") -> {
                 val path = address.removePrefix("unix://")
                 DomainSocketAddress(path)
+            }
+
+            address.startsWith("pipe://") -> {
+                if (!isWindows) {
+                    throw UnsupportedOperationException(
+                        "Windows named pipes are supported only on Windows",
+                    )
+                }
+                WindowsNamedPipeAddress(address.removePrefix("pipe://"))
             }
 
             address.startsWith("tcp://") -> {
@@ -171,6 +163,14 @@ object IpcAddressResolver {
                 NettyServerBuilder.forAddress(parsed)
             }
 
+            is WindowsNamedPipeAddress -> {
+                NettyServerBuilder
+                    .forAddress(parsed)
+                    .channelFactory(WindowsNamedPipeTransport.newServerChannelFactory())
+                    .bossEventLoopGroup(WindowsNamedPipeTransport.newEventLoopGroup())
+                    .workerEventLoopGroup(WindowsNamedPipeTransport.newEventLoopGroup())
+            }
+
             else -> {
                 throw IllegalArgumentException("Unknown address type: $parsed")
             }
@@ -209,6 +209,15 @@ object IpcAddressResolver {
 
             is InetSocketAddress -> {
                 NettyChannelBuilder.forAddress(parsed)
+            }
+
+            is WindowsNamedPipeAddress -> {
+                NettyChannelBuilder
+                    .forAddress(parsed)
+                    .channelFactory(
+                        WindowsNamedPipeTransport.newClientChannelFactory(),
+                        WindowsNamedPipeAddress::class.java,
+                    ).eventLoopGroup(WindowsNamedPipeTransport.newEventLoopGroup())
             }
 
             else -> {
@@ -250,16 +259,5 @@ object IpcAddressResolver {
             // Non-fatal: log but continue. Some filesystems don't support POSIX permissions.
             logger.warn("Could not set socket permissions for {}: {}", path, e.message)
         }
-    }
-
-    private fun findAvailableTcpPort(): Int {
-        for (port in TCP_PORT_BASE until TCP_PORT_BASE + TCP_PORT_RANGE) {
-            try {
-                java.net.ServerSocket(port).use { return port }
-            } catch (_: Exception) {
-                continue
-            }
-        }
-        throw IllegalStateException("No available TCP ports in range $TCP_PORT_BASE-${TCP_PORT_BASE + TCP_PORT_RANGE}")
     }
 }

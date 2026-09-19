@@ -10,7 +10,8 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 
 /**
- * gRPC server wrapper that supports Unix domain sockets (macOS/Linux) and TCP (Windows).
+ * gRPC server wrapper that supports Unix domain sockets (macOS/Linux) and Windows named pipes.
+ * Explicit loopback TCP addresses remain available for legacy and test callers.
  *
  * Usage:
  * ```kotlin
