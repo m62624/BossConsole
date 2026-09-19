@@ -9,6 +9,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CageforgeProcessPolicyTest {
@@ -42,28 +43,74 @@ class CageforgeProcessPolicyTest {
     }
 
     @Test
-    fun `workspace preset restricts local IPC to host-owned Unix socket paths`() {
+    fun `workspace preset restricts local IPC to host-owned endpoints`() {
         val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
         try {
             val kernelSocket = workspace.resolve("boss-kernel.sock")
             val processSocket = workspace.resolve("boss-plugin.sock")
+            val endpoints =
+                if (isWindows()) {
+                    listOf(
+                        CageforgeLocalIpcEndpoint.WindowsNamedPipe("\\\\.\\pipe\\boss-kernel"),
+                        CageforgeLocalIpcEndpoint.WindowsNamedPipe("\\\\.\\pipe\\boss-plugin"),
+                    )
+                } else {
+                    listOf(
+                        CageforgeLocalIpcEndpoint.UnixSocket(kernelSocket.toString()),
+                        CageforgeLocalIpcEndpoint.UnixSocket(processSocket.toString()),
+                    )
+                }
             val policy =
                 CageforgeProcessPolicy.workspace(
                     workspace.toFile(),
-                    localIpcPaths = listOf(kernelSocket.toString(), processSocket.toString()),
+                    localIpcEndpoints = endpoints,
                 )
 
-            assertTrue("mode = \"enabled\"" in policy.toml)
-            assertTrue("unix_socket_mode = \"restricted\"" in policy.toml)
-            assertTrue(kernelSocket.toString() in policy.toml)
-            assertTrue(processSocket.toString() in policy.toml)
-            assertTrue("local_network_access = \"deny\"" in policy.toml)
+            assertTrue("mode = \"disabled\"" in policy.toml)
+            assertTrue(
+                "[profiles.boss-protected.platforms.${platformOverlayName()}.local_ipc]" in policy.toml,
+            )
+            if (isWindows()) {
+                assertTrue("named_pipes = [" in policy.toml)
+                assertTrue("boss-kernel" in policy.toml)
+                assertTrue("boss-plugin" in policy.toml)
+            } else {
+                assertTrue("unix_sockets = [" in policy.toml)
+                assertTrue(kernelSocket.toString() in policy.toml)
+                assertTrue(processSocket.toString() in policy.toml)
+            }
+            assertFalse("unix_socket_mode" in policy.toml)
 
             Cageforge.checkToml(
                 policy.toml,
                 policy.profileName,
                 RuntimeContext(currentDirectory = workspace.toAbsolutePath()),
             )
+        } finally {
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    private fun platformOverlayName(): String =
+        when {
+            System.getProperty("os.name").contains("Windows", ignoreCase = true) -> "windows"
+            System.getProperty("os.name").contains("Mac", ignoreCase = true) -> "macos"
+            else -> "linux"
+        }
+
+    private fun isWindows(): Boolean = System.getProperty("os.name").contains("Windows", ignoreCase = true)
+
+    @Test
+    fun `windows named pipe namespace is validated before policy lowering`() {
+        val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                CageforgeProcessPolicy.workspace(
+                    workspace.toFile(),
+                    localIpcEndpoints =
+                        listOf(CageforgeLocalIpcEndpoint.WindowsNamedPipe("not-a-pipe")),
+                )
+            }
         } finally {
             workspace.toFile().deleteRecursively()
         }

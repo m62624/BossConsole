@@ -35,17 +35,12 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
             emptyList()
         }
     val processId = pluginProcessId(input.windowId, manifest.pluginId)
-    val localIpcPaths =
+    val localIpcEndpoints =
         if (input.securityRequired) {
             listOf(
                 IpcAddressResolver.kernelAddress(),
                 IpcAddressResolver.resolveAddress("plugin", processId),
-            ).map { address ->
-                require(address.startsWith("unix://")) {
-                    "Protected Cageforge IPC requires a Unix-domain transport on this platform: $address"
-                }
-                address.removePrefix("unix://")
-            }
+            ).map(::parseProtectedLocalIpcEndpoint)
         } else {
             emptyList()
         }
@@ -68,7 +63,7 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
             if (input.securityRequired) {
                 CageforgePolicyCeiling
                     .forWorkspace(workDir, protectedRoots)
-                    .policyFor(workDir, localIpcPaths)
+                    .policyFor(workDir, localIpcEndpoints = localIpcEndpoints)
             } else {
                 null
             },
