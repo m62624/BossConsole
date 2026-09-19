@@ -34,8 +34,8 @@ import kotlin.io.path.createDirectories
 class CageforgeNativeSecuritySmokeTest {
     @Test
     fun nativeProcessRegistersThroughAuthenticatedLocalIpc() {
-        val workspace = Files.createTempDirectory("boss-cageforge-auth-")
-        val logs = Files.createTempDirectory("boss-cageforge-auth-logs-")
+        val workspace = nativeSecurityTempDirectory("boss-cageforge-auth-")
+        val logs = nativeSecurityTempDirectory("boss-cageforge-auth-logs-")
         val kernelAddress = IpcAddressResolver.kernelAddress()
         val processId = "native-security-auth"
         val processAddress = IpcAddressResolver.resolveAddress("plugin", processId)
@@ -82,9 +82,9 @@ class CageforgeNativeSecuritySmokeTest {
 
     @Test
     fun nativeProcessCanReachOnlyAnExplicitlyAllowedLocalIpcEndpoint() {
-        val workspace = Files.createTempDirectory("boss-cageforge-ipc-")
-        val logs = Files.createTempDirectory("boss-cageforge-ipc-logs-")
-        val socketRoot = Files.createTempDirectory("boss-cageforge-ipc-sockets-")
+        val workspace = nativeSecurityTempDirectory("boss-cageforge-ipc-")
+        val logs = nativeSecurityTempDirectory("boss-cageforge-ipc-logs-")
+        val socketRoot = nativeSecurityTempDirectory("boss-cageforge-ipc-sockets-")
         val allowedSocket = socketRoot.resolve("allowed.sock")
         val blockedSocket = socketRoot.resolve("blocked.sock")
         val result = workspace.resolve("ipc-result.txt")
@@ -129,9 +129,9 @@ class CageforgeNativeSecuritySmokeTest {
 
     @Test
     fun nativeProcessEnforcesWorkspaceNetworkAndDescendantPolicy() {
-        val workspace = Files.createTempDirectory("boss-cageforge-smoke-")
-        val logs = Files.createTempDirectory("boss-cageforge-logs-")
-        val outside = Files.createTempDirectory("boss-cageforge-outside-").resolve("must-not-exist.txt")
+        val workspace = nativeSecurityTempDirectory("boss-cageforge-smoke-")
+        val logs = nativeSecurityTempDirectory("boss-cageforge-logs-")
+        val outside = nativeSecurityTempDirectory("boss-cageforge-outside-").resolve("must-not-exist.txt")
         val server = ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())
         try {
             val classpath = System.getProperty("java.class.path")
@@ -153,8 +153,8 @@ class CageforgeNativeSecuritySmokeTest {
 
     @Test
     fun nativeProcessKillDoesNotLeaveADescendant() {
-        val workspace = Files.createTempDirectory("boss-cageforge-kill-")
-        val logs = Files.createTempDirectory("boss-cageforge-kill-logs-")
+        val workspace = nativeSecurityTempDirectory("boss-cageforge-kill-")
+        val logs = nativeSecurityTempDirectory("boss-cageforge-kill-logs-")
         val ready = workspace.resolve("kill-ready.txt")
         val lateMarker = workspace.resolve("late-descendant-write.txt")
         var managed: ManagedProcess? = null
@@ -260,6 +260,18 @@ class CageforgeNativeSecuritySmokeTest {
             .split(File.pathSeparator)
             .filter { it.isNotBlank() }
             .map(::File)
+
+    private fun nativeSecurityTempDirectory(prefix: String): Path {
+        val systemTemp = File(System.getProperty("java.io.tmpdir")).toPath()
+        val shortUnixTemp = File("/tmp").toPath()
+        val root =
+            if (!isWindows() && Files.isDirectory(shortUnixTemp)) {
+                shortUnixTemp
+            } else {
+                systemTemp
+            }
+        return Files.createTempDirectory(root, prefix)
+    }
 
     private fun awaitFile(path: Path) {
         repeat(200) {
