@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 
 usage() {
@@ -97,26 +99,50 @@ write_files:
         fi
       done
       sysctl --system
+      echo '[boss] probing Bubblewrap user, PID, IPC, and network namespaces'
+      echo "[boss] userns=\$(sysctl -n kernel.unprivileged_userns_clone)"
+      if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+        echo "[boss] apparmor_userns=\$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
+      else
+        echo '[boss] apparmor_userns=sysctl-unavailable'
+      fi
       probe_bubblewrap_namespace() {
         local namespace=\$1
         local flag=\$2
-        shift 2
+        local guidance=\$3
+        shift 3
         echo "[boss] probing \$namespace namespace (\$flag)"
-        timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
-          --die-with-parent --unshare-user "\$flag" "\$@" --ro-bind / / /bin/true
+        if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
+          --die-with-parent --unshare-user "\$@" --ro-bind / / /bin/true; then
+          echo "[boss] \$namespace namespace probe failed (\$flag): \$guidance" >&2
+          return 1
+        fi
       }
-      probe_bubblewrap_namespace user --unshare-user
-      probe_bubblewrap_namespace pid --unshare-pid --as-pid-1
-      probe_bubblewrap_namespace ipc --unshare-ipc
-      probe_bubblewrap_namespace network --unshare-net
-      echo '[boss] probing nested user namespace isolation'
-      timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
-        --die-with-parent --unshare-user --disable-userns --ro-bind / / /bin/true
-      echo '[boss] probing root capability removal'
-      timeout --kill-after=5s 15s bwrap \
+      probe_bubblewrap_namespace user --unshare-user \
+        'enable unprivileged user namespaces and permit them in the guest security policy'
+      probe_bubblewrap_namespace PID --unshare-pid \
+        'the guest kernel must permit CLONE_NEWPID' --unshare-pid --as-pid-1
+      probe_bubblewrap_namespace IPC --unshare-ipc \
+        'the guest kernel must permit CLONE_NEWIPC' --unshare-ipc
+      probe_bubblewrap_namespace network --unshare-net \
+        'the guest kernel must permit CLONE_NEWNET' --unshare-net
+      echo '[boss] all Bubblewrap namespace probes passed'
+      echo '[boss] probing nested user namespace isolation (--disable-userns)'
+      if ! timeout --kill-after=5s 15s runuser -u ubuntu -- bwrap \
+        --die-with-parent --unshare-user --disable-userns --ro-bind / / /bin/true; then
+        echo '[boss] nested user namespace isolation failed: the guest must permit namespaced user.max_user_namespaces lockdown' >&2
+        exit 1
+      fi
+      echo '[boss] nested user namespace isolation passed'
+      echo '[boss] probing root capability removal (--cap-drop ALL)'
+      if ! timeout --kill-after=5s 15s bwrap \
         --die-with-parent --unshare-user --unshare-pid --as-pid-1 --cap-drop ALL \
         --ro-bind / / --proc /proc /bin/sh -c \
-        'awk '\''/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { found++; if (\$2 != "0000000000000000") bad=1 } END { exit (found == 5 && bad == 0 ? 0 : 1) }'\'' /proc/self/status'
+        'awk '\''/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { found++; if (\$2 != "0000000000000000") bad=1 } END { exit (found == 5 && bad == 0 ? 0 : 1) }'\'' /proc/self/status'; then
+        echo '[boss] root capability removal failed: the guest must permit capability reduction inside user namespaces' >&2
+        exit 1
+      fi
+      echo '[boss] root capability removal passed'
       touch /var/lib/boss-cageforge-bootstrap-complete
 runcmd:
   - [cloud-init-per, once, boss-cageforge-bootstrap, bash, /etc/boss-cageforge-bootstrap.sh]
@@ -191,13 +217,24 @@ wait_for_bootstrap() {
             fi
         fi
         if ssh_guest 'systemctl is-failed --quiet cloud-final.service' >/dev/null 2>&1; then
-            ssh_guest 'sudo tail -n 160 /var/log/cloud-init-output.log || true' >&2 || true
+            print_guest_bootstrap_diagnostics >&2 || true
             exit 70
         fi
         sleep 2
     done
-    ssh_guest 'sudo tail -n 160 /var/log/cloud-init-output.log || true' >&2 || true
+    print_guest_bootstrap_diagnostics >&2 || true
     exit 70
+}
+
+print_guest_bootstrap_diagnostics() {
+    echo '--- guest Cageforge bootstrap log ---'
+    ssh_guest 'sudo tail -n 160 /var/log/boss-cageforge-bootstrap.log || true' || true
+    echo '--- guest cloud-init diagnostics ---'
+    ssh_guest 'sudo cloud-init status --long || true
+sudo systemctl show cloud-final.service --property=ActiveState,SubState,ExecMainStatus --no-pager || true
+sudo journalctl -u cloud-final.service -n 80 --no-pager || true
+sudo grep -Ei "error|fail|unexpected|exit code|traceback" /var/log/cloud-init-output.log /var/log/cloud-init.log | tail -n 80 || true
+sudo dpkg --audit || true' || true
 }
 
 echo '[boss] bootstrapping native guest in unrestricted mode'
@@ -228,6 +265,9 @@ sudo umount /mnt/boss-test-bundle
 EOF
 result=$?
 set -e
+if [[ "$result" -ne 0 ]]; then
+    print_guest_bootstrap_diagnostics >&2 || true
+fi
 stop_guest
 if [[ "$result" -ne 0 ]]; then
     tail -n 160 "$serial_log" >&2 || true
