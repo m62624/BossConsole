@@ -5,9 +5,9 @@ import ai.rever.boss.process.CageforgeLocalIpcEndpoint
 /**
  * Converts a BOSS IPC address into the endpoint kind supported by Cageforge policy.
  *
- * Windows keeps TCP for the ordinary legacy IPC transport today. A protected launch cannot
- * accept that address: it must wait for BOSS to provide a real named-pipe transport instead of
- * widening the Cageforge policy to loopback networking.
+ * Windows uses the native named-pipe transport for protected launches. Explicit TCP loopback
+ * addresses remain legacy/test-only and are rejected here rather than widening the Cageforge
+ * policy to unrestricted loopback networking.
  */
 internal fun parseProtectedLocalIpcEndpoint(address: String): CageforgeLocalIpcEndpoint =
     when {
