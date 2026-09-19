@@ -21,6 +21,7 @@ import java.io.OutputStream
 import java.net.SocketAddress
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** A typed SocketAddress for the Windows `\\.\pipe\` namespace. */
@@ -57,7 +58,14 @@ internal object WindowsNamedPipeTransport {
         // next(); gRPC asks its transport group for next() while building every server and
         // client. The channels retain their blocking stream implementation, while a regular
         // event-loop group supplies the executor contract required by gRPC.
-        io.netty.channel.DefaultEventLoopGroup()
+        io.netty.channel.DefaultEventLoopGroup(
+            0,
+            ThreadFactory { runnable ->
+                Thread(runnable, "boss-ipc-windows-pipe-event-loop").apply {
+                    isDaemon = true
+                }
+            },
+        )
 }
 
 private const val NAMED_PIPE_CLIENT_BIND_ERROR = "A named-pipe client cannot bind"
