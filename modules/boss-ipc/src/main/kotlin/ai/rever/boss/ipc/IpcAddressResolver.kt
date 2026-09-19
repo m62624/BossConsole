@@ -43,7 +43,7 @@ object IpcAddressResolver {
                     val rootDir = dirsCls.getMethod("getRootDir").invoke(dirsInst) as File
                     rootDir.absolutePath
                 } catch (_: Exception) {
-                    "${System.getProperty("user.home")}/.boss"
+                    File(System.getProperty("user.home"), ".boss").path
                 }
         File(bossDataDir, "ipc").also { it.mkdirs() }
     }

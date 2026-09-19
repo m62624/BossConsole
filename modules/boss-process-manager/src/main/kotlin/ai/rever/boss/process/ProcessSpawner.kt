@@ -33,7 +33,7 @@ class ProcessSpawner
         private val logDir: File =
             File(
                 System.getenv("BOSS_DATA_DIR")
-                    ?: "${System.getProperty("user.home")}/.boss",
+                    ?: File(System.getProperty("user.home"), ".boss").path,
                 "logs",
             ),
         private val registry: ProcessRegistry? = null,
