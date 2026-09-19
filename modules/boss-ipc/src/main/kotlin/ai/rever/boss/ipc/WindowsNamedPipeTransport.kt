@@ -53,8 +53,11 @@ internal object WindowsNamedPipeTransport {
         io.netty.channel.ChannelFactory { WindowsNamedPipeServerChannel() }
 
     fun newEventLoopGroup() =
-        io.netty.channel.oio
-            .OioEventLoopGroup()
+        // Netty's OioEventLoopGroup is thread-per-channel and intentionally throws from
+        // next(); gRPC asks its transport group for next() while building every server and
+        // client. The channels retain their blocking stream implementation, while a regular
+        // event-loop group supplies the executor contract required by gRPC.
+        io.netty.channel.DefaultEventLoopGroup()
 }
 
 private const val NAMED_PIPE_CLIENT_BIND_ERROR = "A named-pipe client cannot bind"
@@ -87,6 +90,8 @@ private class WindowsNamedPipeChannel : OioByteStreamChannel {
     }
 
     override fun config(): ChannelConfig = config
+
+    override fun isCompatible(eventLoop: EventLoop): Boolean = true
 
     override fun isOpen(): Boolean = connection?.isClosed != true
 
@@ -121,6 +126,8 @@ private class WindowsNamedPipeChannel : OioByteStreamChannel {
 private abstract class UnsupportedNamedPipeServerChannel :
     AbstractOioMessageChannel(null),
     ServerChannel {
+    override fun isCompatible(eventLoop: EventLoop): Boolean = true
+
     override fun doConnect(
         remoteAddress: SocketAddress,
         localAddress: SocketAddress?,
