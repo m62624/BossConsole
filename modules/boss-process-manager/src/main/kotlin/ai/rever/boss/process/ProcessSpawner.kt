@@ -1,6 +1,7 @@
 package ai.rever.boss.process
 
 import ai.cageforge.Cageforge
+import ai.cageforge.CageforgeProcess
 import ai.cageforge.RuntimeContext
 import ai.rever.boss.ipc.IpcAddressResolver
 import ai.rever.boss.ipc.auth.IpcEnvironment
@@ -150,20 +151,22 @@ class ProcessSpawner
                     policy.profileName,
                     runtimeContext,
                 )
-            var managed: CageforgeManagedProcess? = null
+            var child: CageforgeProcess? = null
             return runCatching {
-                val child = CageforgeManagedProcess(runtime.launch(buildBootstrapArgv(command, workDir)), runtime)
-                managed = child
+                val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
+                child = process
+                process.onExit().whenComplete { _, _ -> runCatching { runtime.close() } }
                 ProtectedEnvironmentChannel.send(
-                    child.inputStream,
-                    child.outputStream,
+                    process.inputStream,
+                    process.outputStream,
                     environment,
                     config.startupTimeoutMs,
                 )
-                child
+                process
             }.onFailure {
-                managed?.destroyForcibly()
-                managed?.onExit()?.join()
+                child?.destroyForcibly()
+                child?.onExit()?.join()
+                child?.close()
                 runtime.close()
             }.getOrThrow()
         }
