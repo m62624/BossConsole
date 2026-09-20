@@ -292,6 +292,7 @@ jobs:
       # protected policy. The smoke must therefore prove both allowed and denied
       # named-pipe access after the explicit Cageforge setup is ready.
       - name: Provision Cageforge Windows prerequisites
+        timeout-minutes: 8
         env:
           CAGEFORGE_WINDOWS_SETUP_MARKER: ${{ runner.temp }}/cageforge-windows-setup-owned
         run: |
@@ -313,6 +314,7 @@ jobs:
             --stacktrace
 
       - name: Remove Cageforge Windows prerequisites
+        timeout-minutes: 5
         if: always()
         env:
           CAGEFORGE_WINDOWS_SETUP_MARKER: ${{ runner.temp }}/cageforge-windows-setup-owned
