@@ -246,11 +246,11 @@ class CageforgeNativeSecuritySmokeTest {
         outside: Path,
         server: ServerSocket,
     ) {
-        val output =
-            process.inputStream
-                .bufferedReader()
-                .readLines()
-                .joinToString("\n")
+        assertTrue(
+            process.waitFor(10, TimeUnit.SECONDS),
+            "native security probe did not exit before output collection",
+        )
+        val output = readAvailableOutput(process)
         assertTrue(output.contains("probe-ready"), output)
         assertTrue(output.contains("explicit-channel-value"), output)
         assertTrue(output.contains("outside-denied"), output)
@@ -258,7 +258,7 @@ class CageforgeNativeSecuritySmokeTest {
         assertTrue(output.contains("grandchild-ready"), output)
         assertTrue(Files.exists(workspace.resolve("child-created.txt")))
         assertTrue(Files.exists(workspace.resolve("grandchild-created.txt")))
-        assertEquals(0, process.waitFor())
+        assertEquals(0, process.exitValue())
         assertTrue(!Files.exists(outside), "probe must not create files outside its workspace")
         server.soTimeout = 100
         val networkReached = runCatching { server.accept().use { true } }.getOrDefault(false)
