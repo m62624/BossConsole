@@ -40,7 +40,6 @@ data class CageforgeProcessPolicy(
             readOnlyRoots: Iterable<File> = emptyList(),
             localIpcPaths: Iterable<String> = emptyList(),
             localIpcEndpoints: Iterable<CageforgeLocalIpcEndpoint> = emptyList(),
-            runtimeExecutableRoots: Iterable<File> = emptyList(),
         ): CageforgeProcessPolicy {
             require(workspace.isAbsolute) { "Cageforge workspace must be absolute" }
             val root = workspace.canonicalFile
@@ -55,19 +54,6 @@ data class CageforgeProcessPolicy(
                         require(it.exists()) { "Cageforge read-only root does not exist: ${it.path}" }
                     }.filterNot { it == root }
                     .distinctBy { it.path }
-
-            val executableRoots =
-                runtimeExecutableRoots
-                    .map {
-                        require(it.isAbsolute) {
-                            "Cageforge runtime executable root must be absolute: ${it.path}"
-                        }
-                        it.canonicalFile
-                    }.onEach {
-                        require(it.isDirectory) {
-                            "Cageforge runtime executable root must be an existing directory: ${it.path}"
-                        }
-                    }.distinctBy { it.path }
 
             val endpoints =
                 localIpcPaths
@@ -93,13 +79,9 @@ data class CageforgeProcessPolicy(
                 CageforgeTomlBuilder.build(
                     root = root,
                     readOnlyRoots = effectiveReadOnlyRoots,
-                    localIpc =
-                        CageforgeLocalIpcPolicy(
-                            parentRoots = ipcParentRoots,
-                            unixSocketPaths = unixSocketPaths,
-                            namedPipeNames = namedPipeNames,
-                        ),
-                    runtimeExecutableRoots = executableRoots,
+                    ipcParentRoots = ipcParentRoots,
+                    unixSocketPaths = unixSocketPaths,
+                    namedPipeNames = namedPipeNames,
                 ),
                 CAGEFORGE_PROFILE_NAME,
             )
@@ -186,7 +168,6 @@ class CageforgePolicyCeiling private constructor(
         workspace: File,
         localIpcPaths: Iterable<String> = emptyList(),
         localIpcEndpoints: Iterable<CageforgeLocalIpcEndpoint> = emptyList(),
-        runtimeExecutableRoots: Iterable<File> = emptyList(),
     ): CageforgeProcessPolicy {
         require(workspace.isAbsolute) { "Cageforge requested workspace must be absolute" }
         val requestedRoot = workspace.canonicalFile
@@ -201,7 +182,6 @@ class CageforgePolicyCeiling private constructor(
             readOnlyRoots,
             localIpcPaths,
             localIpcEndpoints,
-            runtimeExecutableRoots,
         )
     }
 
