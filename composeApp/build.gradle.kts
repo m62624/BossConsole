@@ -919,6 +919,8 @@ kotlin {
                             "**/plugin/PluginStateBridge.kt",
                             "**/plugin/ProtectedPluginProcessConfig.kt",
                             "**/plugin/ProtectedPluginIpcEndpoint.kt",
+                            "**/plugin/ProtectedPluginPolicy.kt",
+                            "**/plugin/ValidatedPluginSandboxRequest.kt",
                         )
                     }
                 }
