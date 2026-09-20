@@ -160,7 +160,7 @@ class ProcessSpawner
                 )
             var child: CageforgeProcess? = null
             return runCatching {
-                val process = runtime.launchProcess(buildBootstrapArgv(command, workDir, config))
+                val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
                 child = process
                 process.onExit().whenComplete { _, _ -> runCatching { runtime.close() } }
                 ProtectedEnvironmentChannel.send(
@@ -207,7 +207,6 @@ class ProcessSpawner
         private fun buildBootstrapArgv(
             command: List<String>,
             workDir: File,
-            config: ProcessConfig,
         ): List<String> {
             val java = File(findJavaExecutable()).canonicalFile
             require(java.isAbsolute && java.isFile && java.canExecute()) {
