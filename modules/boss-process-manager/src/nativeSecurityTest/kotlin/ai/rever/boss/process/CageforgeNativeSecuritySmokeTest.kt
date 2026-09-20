@@ -183,7 +183,7 @@ class CageforgeNativeSecuritySmokeTest {
                         CageforgeProcessPolicy.workspace(
                             workspace.toFile(),
                             readRoots,
-                            runtimeExecutableRoots = javaRuntimeExecutableRoots(),
+                            runtimeExecutableRoots = javaRuntimeExecutableRoots(workspace),
                         ),
                 )
 
@@ -235,7 +235,7 @@ class CageforgeNativeSecuritySmokeTest {
                 CageforgeProcessPolicy.workspace(
                     workspace.toFile(),
                     readRoots,
-                    runtimeExecutableRoots = javaRuntimeExecutableRoots(),
+                    runtimeExecutableRoots = javaRuntimeExecutableRoots(workspace),
                 ),
         )
     }
@@ -421,7 +421,7 @@ private fun authenticatedIpcConfig(
                     listOf(kernelAddress, processAddress).map(
                         ::nativeLocalIpcEndpoint,
                     ),
-                runtimeExecutableRoots = javaRuntimeExecutableRoots(),
+                runtimeExecutableRoots = javaRuntimeExecutableRoots(workspace),
             ),
     )
 }
@@ -481,7 +481,7 @@ private fun createLocalIpcConfig(
                 workspace.toFile(),
                 readRoots,
                 localIpcPaths = listOf(allowedSocket.toString()),
-                runtimeExecutableRoots = javaRuntimeExecutableRoots(),
+                runtimeExecutableRoots = javaRuntimeExecutableRoots(workspace),
             ),
     )
 }
@@ -503,7 +503,7 @@ private fun readSocketByte(server: ServerSocketChannel?): Byte {
 
 private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
-private fun javaRuntimeExecutableRoots(): List<File> =
+private fun javaRuntimeExecutableRoots(workspace: Path): List<File> =
     buildList {
         add(File(System.getProperty("java.home")).canonicalFile)
         File(ProcessSpawner.findJavaExecutable())
@@ -511,6 +511,9 @@ private fun javaRuntimeExecutableRoots(): List<File> =
             .parentFile
             ?.takeIf { it.isDirectory }
             ?.let(::add)
+        if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
+            add(workspace.toFile().canonicalFile)
+        }
     }.distinctBy { it.path }
 
 private fun awaitFileText(path: Path): String {

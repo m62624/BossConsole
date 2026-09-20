@@ -50,7 +50,7 @@ internal fun ProtectedPluginProcessConfig.prepare(): PreparedProtectedPluginLaun
     val classpath = listOfNotNull(runtimeJar.path, pluginJar.path, apiJar).joinToString(File.pathSeparator)
     val protectedRoots =
         if (input.securityRequired) {
-            protectedClasspathRoots(classpath, nativeImage)
+            protectedClasspathRoots(classpath, nativeImage, workDir)
         } else {
             ProtectedRoots(emptyList(), emptyList())
         }
@@ -202,6 +202,7 @@ internal data class ProtectedRoots(
 private fun protectedClasspathRoots(
     classpath: String,
     nativeImage: String?,
+    workDir: File,
 ): ProtectedRoots {
     val javaHome =
         File(System.getProperty("java.home"))
@@ -249,6 +250,13 @@ private fun protectedClasspathRoots(
                 ?.parentFile
                 ?.takeIf { it.isDirectory }
                 ?.let(::add)
+            if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
+                // Netty's Unix transport extracts its Mach-O library into the explicit
+                // io.netty.native.workdir used by protected launches. Seatbelt keeps
+                // file reads separate from executable mapping, so this writable BOSS
+                // workspace must be declared as a runtime root as well.
+                add(workDir)
+            }
         }.distinctBy { it.path }
     return ProtectedRoots(readOnlyRoots, executableRoots)
 }
