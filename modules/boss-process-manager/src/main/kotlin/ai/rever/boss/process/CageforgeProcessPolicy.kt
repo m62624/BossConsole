@@ -162,7 +162,8 @@ private fun macOsRuntimeReadOnlyRoots(): List<File> {
     if (!System.getProperty("os.name").contains("mac", ignoreCase = true)) return emptyList()
     return buildList {
         File("/System/Cryptexes/OS").canonicalFile.takeIf { it.isDirectory }?.let(::add)
-        File(System.getProperty("user.home"), ".CFUserTextEncoding")
+        val hostHome = System.getenv("HOME") ?: System.getProperty("user.home")
+        File(hostHome, ".CFUserTextEncoding")
             .canonicalFile
             .takeIf { it.isFile }
             ?.let(::add)
