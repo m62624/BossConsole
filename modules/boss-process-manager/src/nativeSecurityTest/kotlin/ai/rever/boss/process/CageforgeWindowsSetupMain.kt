@@ -31,13 +31,10 @@ private fun setup(marker: Path) {
             WindowsSetup.verify()
         }
 
-        WindowsSetupState.MISSING -> {
+        WindowsSetupState.MISSING,
+        WindowsSetupState.STALE,
+        -> {
             installAndRecord(marker)
-        }
-
-        WindowsSetupState.STALE -> {
-            WindowsSetup.install()
-            WindowsSetup.verify()
         }
     }
 }
@@ -53,6 +50,9 @@ private fun teardown(marker: Path) {
     if (!Files.exists(marker)) return
     check(WindowsSetup.isSupported()) { "Cageforge Windows setup is only available on Windows" }
     WindowsSetup.uninstall()
+    check(WindowsSetup.status() == WindowsSetupState.MISSING) {
+        "Cageforge Windows setup was not removed"
+    }
     Files.deleteIfExists(marker)
 }
 
