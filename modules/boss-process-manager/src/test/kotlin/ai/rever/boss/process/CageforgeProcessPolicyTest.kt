@@ -193,7 +193,13 @@ class CageforgeProcessPolicyTest {
                 )
 
             val policy = ceiling.policyFor(approved.toFile(), additionalReadOnlyRoots = listOf(requested.toFile()))
-            assertTrue(requested.toFile().canonicalPath in policy.toml)
+            val escapedRequestedPath =
+                requested
+                    .toFile()
+                    .canonicalPath
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+            assertTrue(escapedRequestedPath in policy.toml)
             assertFailsWith<IllegalArgumentException> {
                 ceiling.policyFor(approved.toFile(), additionalReadOnlyRoots = listOf(parent.toFile()))
             }

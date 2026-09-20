@@ -39,12 +39,13 @@ private fun validatePluginFilesystemRequests(
     workspace: File,
     protectedRoots: ProtectedRoots,
 ): Pair<List<PluginSandboxFilesystemRequest>, List<File>> {
+    val canonicalWorkspace = workspace.canonicalFile
     val readOnlyRoots = mutableListOf<File>()
     val filesystem =
         request.filesystem
             .map { capability ->
-                val path = resolvePluginRequestedPath(capability.path, workspace)
-                val withinWorkspace = path.toPath().startsWith(workspace.toPath())
+                val path = resolvePluginRequestedPath(capability.path, canonicalWorkspace)
+                val withinWorkspace = path.toPath().startsWith(canonicalWorkspace.toPath())
                 val withinRuntime = protectedRoots.readOnlyRoots.any { path.toPath().startsWith(it.toPath()) }
                 when (capability.access) {
                     "read" -> {
