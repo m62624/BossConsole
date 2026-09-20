@@ -285,16 +285,38 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       # The protected BOSS launch path verifies Cageforge's persistent,
-      # owner-scoped Windows setup but never invokes UAC implicitly. This lane
-      # therefore requires a runner that has already completed the explicit
-      # Cageforge setup operation; missing or stale setup is a hard failure.
+      # owner-scoped Windows setup but never invokes UAC implicitly. Provisioning
+      # is therefore an explicit CI step, separate from the protected launch.
       # The BOSS IPC resolver uses the same Windows named-pipe transport as the
       # protected policy. The smoke must therefore prove both allowed and denied
       # named-pipe access after the explicit Cageforge setup is ready.
+      - name: Provision Cageforge Windows prerequisites
+        env:
+          CAGEFORGE_WINDOWS_SETUP_MARKER: ${{ runner.temp }}/cageforge-windows-setup-owned
+        run: |
+          ./gradlew \
+            :boss-process-manager:windowsNativeSecuritySetup \
+            --no-daemon \
+            --max-workers=2 \
+            --console=plain \
+            --stacktrace
+
       - name: Run native security smoke
         run: |
           ./gradlew \
             :boss-process-manager:nativeSecurityTest \
+            --no-daemon \
+            --max-workers=2 \
+            --console=plain \
+            --stacktrace
+
+      - name: Remove Cageforge Windows prerequisites
+        if: always()
+        env:
+          CAGEFORGE_WINDOWS_SETUP_MARKER: ${{ runner.temp }}/cageforge-windows-setup-owned
+        run: |
+          ./gradlew \
+            :boss-process-manager:windowsNativeSecurityTeardown \
             --no-daemon \
             --max-workers=2 \
             --console=plain \
