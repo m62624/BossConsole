@@ -195,6 +195,19 @@ jobs:
 
       # macOS uses Cageforge's native Seatbelt backend directly. It does not
       # need QEMU; the runner itself is the native enforcement environment.
+      - name: Inspect macOS Java runtime
+        run: |
+          set -eu
+          java_bin="$(command -v java)"
+          real_java="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$java_bin")"
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "java.home=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.home = //p')"
+          echo "java_bin=$java_bin"
+          echo "real_java=$real_java"
+          echo "java_home_bin=$JAVA_HOME/bin/java"
+          ls -ld "$JAVA_HOME" "$JAVA_HOME/bin" "$JAVA_HOME/bin/java" "$real_java"
+          otool -L "$real_java"
+
       - name: Run native security smoke
         run: |
           ./gradlew \
