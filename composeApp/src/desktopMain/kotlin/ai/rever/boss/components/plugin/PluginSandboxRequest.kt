@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.plugin.launchpad.DevPluginArtifacts
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -49,10 +50,13 @@ internal object PluginSandboxRequestReader {
             val entry =
                 jar.getJarEntry("META-INF/boss-plugin/plugin.json")
                     ?: return PluginSandboxRequest.EMPTY
-            val root =
-                jar.getInputStream(entry).bufferedReader().use { reader ->
-                    json.parseToJsonElement(reader.readText()).jsonObject
+            val manifest =
+                jar.getInputStream(entry).use { stream ->
+                    requireNotNull(DevPluginArtifacts.readBoundedUtf8String(stream)) {
+                        "Plugin manifest exceeds ${DevPluginArtifacts.MAX_MANIFEST_BYTES} bytes or cannot be read"
+                    }
                 }
+            val root = json.parseToJsonElement(manifest).jsonObject
             read(root)
         }
 

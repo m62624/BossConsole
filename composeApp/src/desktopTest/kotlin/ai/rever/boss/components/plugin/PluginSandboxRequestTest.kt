@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.plugin.launchpad.DevPluginArtifacts
 import java.io.File
 import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
@@ -96,6 +97,20 @@ class PluginSandboxRequestTest {
             assertTrue(PluginSandboxRequestReader.readFromJar(emptyJar.path).isEmpty)
         } finally {
             emptyJar.delete()
+        }
+    }
+
+    @Test
+    fun `rejects an oversized plugin manifest before parsing capabilities`() {
+        val oversizedManifest =
+            """{"sandbox":{"network":["${"x".repeat(DevPluginArtifacts.MAX_MANIFEST_BYTES)}"]}}"""
+        val jar = manifestJar(oversizedManifest)
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                PluginSandboxRequestReader.readFromJar(jar.path)
+            }
+        } finally {
+            jar.delete()
         }
     }
 
