@@ -221,7 +221,6 @@ class ProcessSpawner
                 System.getProperty("java.class.path")?.takeIf { it.isNotBlank() }
                     ?: error("Protected launch requires the current JVM classpath")
             return buildList {
-                addAll(macOsBootstrapEnvironment(workDir))
                 add(java.path)
                 add("-cp")
                 add(classpath)
@@ -323,17 +322,3 @@ class ProcessSpawner
             }
         }
     }
-
-private fun macOsBootstrapEnvironment(workDir: File): List<String> {
-    if (CageforgePlatform.current() != CageforgePlatform.MACOS) return emptyList()
-    // The macOS JVM reads HOME before the bootstrap can receive BOSS's one-shot environment.
-    // Set it through a structured argv prefix so startup never probes the host home directory.
-    val env =
-        File("/usr/bin/env").canonicalFile.also {
-            require(it.isFile && it.canExecute()) {
-                "Protected macOS bootstrap requires /usr/bin/env: ${it.path}"
-            }
-        }
-    val path = workDir.path
-    return listOf(env.path, "HOME=$path", "TMPDIR=$path${File.separator}")
-}
