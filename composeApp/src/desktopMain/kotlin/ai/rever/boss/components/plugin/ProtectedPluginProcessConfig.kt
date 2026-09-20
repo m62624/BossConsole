@@ -158,6 +158,13 @@ private fun protectedClasspathRoots(
                     "java.home must be an absolute directory: ${it.path}"
                 }
             }.canonicalFile
+    val javaExecutable =
+        File(ProcessSpawner.findJavaExecutable())
+            .also {
+                require(it.isAbsolute && it.isFile && it.canExecute()) {
+                    "Protected Java executable must be absolute and executable: ${it.path}"
+                }
+            }.canonicalFile
     val readOnlyRoots =
         buildList {
             addAll(classpathRoots(System.getProperty("java.class.path")))
@@ -177,19 +184,13 @@ private fun protectedClasspathRoots(
                 ?.let(::add)
             File(javaHome, "conf/security/java.security.d").canonicalFile.takeIf { it.isDirectory }?.let(::add)
             File(javaHome, "conf/security/java.security").canonicalFile.takeIf { it.isFile }?.let(::add)
-            add(
-                File(ProcessSpawner.findJavaExecutable())
-                    .also {
-                        require(it.isAbsolute && it.isFile && it.canExecute()) {
-                            "Protected Java executable must be absolute and executable: ${it.path}"
-                        }
-                    }.normalize(),
-            )
+            add(javaExecutable)
             nativeImage?.let(::File)?.let(::add)
         }.distinctBy { it.path }
     val executableRoots =
         buildList {
             add(javaHome)
+            javaExecutable.parentFile?.takeIf { it.isDirectory }?.let(::add)
             nativeImage
                 ?.let(::File)
                 ?.canonicalFile

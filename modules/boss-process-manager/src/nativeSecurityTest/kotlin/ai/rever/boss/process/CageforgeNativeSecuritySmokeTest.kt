@@ -504,9 +504,14 @@ private fun readSocketByte(server: ServerSocketChannel?): Byte {
 private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
 private fun javaRuntimeExecutableRoots(): List<File> =
-    listOf(
-        File(System.getProperty("java.home")).canonicalFile,
-    )
+    buildList {
+        add(File(System.getProperty("java.home")).canonicalFile)
+        File(ProcessSpawner.findJavaExecutable())
+            .canonicalFile
+            .parentFile
+            ?.takeIf { it.isDirectory }
+            ?.let(::add)
+    }.distinctBy { it.path }
 
 private fun awaitFileText(path: Path): String {
     repeat(200) {
