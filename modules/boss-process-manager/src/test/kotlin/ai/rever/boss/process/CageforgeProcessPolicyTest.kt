@@ -53,9 +53,11 @@ class CageforgeProcessPolicyTest {
                 )
             val rootPath = runtimeRoot.toFile().canonicalPath
             val nestedPath = nestedRoot.toFile().canonicalPath
+            val escapedRootPath = rootPath.replace("\\", "\\\\").replace("\"", "\\\"")
+            val escapedNestedPath = nestedPath.replace("\\", "\\\\").replace("\"", "\\\"")
 
-            assertTrue(rootPath in policy.toml)
-            assertFalse(nestedPath in policy.toml)
+            assertTrue(escapedRootPath in policy.toml)
+            assertFalse(escapedNestedPath in policy.toml)
         } finally {
             runtimeRoot.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
