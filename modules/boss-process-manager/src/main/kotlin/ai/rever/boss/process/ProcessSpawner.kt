@@ -42,6 +42,7 @@ class ProcessSpawner
         private val kernelIdentity: IpcTlsIdentity? = null,
     ) {
         private val logger = LoggerFactory.getLogger(ProcessSpawner::class.java)
+        private val macOsHost = System.getProperty("os.name").contains("mac", ignoreCase = true)
 
         /**
          * Spawn a new child process from the given configuration and register it.
@@ -160,7 +161,7 @@ class ProcessSpawner
                 )
             var child: CageforgeProcess? = null
             return runCatching {
-                val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
+                val process = runtime.launchProcess(buildBootstrapArgv(command, workDir, config))
                 child = process
                 process.onExit().whenComplete { _, _ -> runCatching { runtime.close() } }
                 ProtectedEnvironmentChannel.send(
@@ -207,6 +208,7 @@ class ProcessSpawner
         private fun buildBootstrapArgv(
             command: List<String>,
             workDir: File,
+            config: ProcessConfig,
         ): List<String> {
             val java = File(findJavaExecutable()).canonicalFile
             require(java.isAbsolute && java.isFile && java.canExecute()) {
@@ -217,6 +219,9 @@ class ProcessSpawner
                     ?: error("Protected launch requires the current JVM classpath")
             return buildList {
                 add(java.path)
+                // Cageforge's macOS contract maps runtime files but does not authorize anonymous
+                // JIT pages. Keep the protected bootstrap executable without changing ordinary JVMs.
+                if (config.cageforge != null && macOsHost) add("-Xint")
                 add("-cp")
                 add(classpath)
                 add(ProtectedChildBootstrap::class.java.name)
@@ -276,6 +281,8 @@ class ProcessSpawner
 
             return buildList {
                 add(javaExecutable)
+                // The target JVM inherits the same Seatbelt limitation as its protected bootstrap.
+                if (config.cageforge != null && macOsHost) add("-Xint")
                 addAll(config.jvmArgs)
                 if (config.classpath.isNotBlank()) {
                     add("-cp")
