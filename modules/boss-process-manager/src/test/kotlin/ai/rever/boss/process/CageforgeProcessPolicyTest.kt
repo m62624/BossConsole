@@ -27,7 +27,12 @@ class CageforgeProcessPolicyTest {
             assertTrue("target = \"minimal\"" in policy.toml)
             assertTrue("target = \"workspace-root\"" in policy.toml)
             assertTrue("target = \"absolute\"" in policy.toml)
-            val escapedRuntimeRoot = runtimeRoot.toString().replace("\\", "\\\\").replace("\"", "\\\"")
+            val escapedRuntimeRoot =
+                runtimeRoot
+                    .toFile()
+                    .canonicalPath
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
             assertTrue(escapedRuntimeRoot in policy.toml)
             assertTrue("/dev/.cageforge-runtime" !in policy.toml)
 
