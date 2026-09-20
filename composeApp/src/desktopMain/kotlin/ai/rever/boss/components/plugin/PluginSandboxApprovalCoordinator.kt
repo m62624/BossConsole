@@ -16,11 +16,12 @@ internal suspend fun requestSandboxApproval(
     manifest: PluginManifest,
     pluginId: String,
     sandboxRequest: PluginSandboxRequest,
+    approvalBus: PluginSandboxApprovalBus = PluginSandboxApprovalRegistry.bus,
 ) {
     if (sandboxRequest.isEmpty) return
     when (
         val decision =
-            PluginSandboxApprovalRegistry.bus.requestApproval(
+            approvalBus.requestApproval(
                 pluginId = pluginId,
                 displayName = manifest.displayName,
                 capabilities = sandboxRequest.capabilities(),
