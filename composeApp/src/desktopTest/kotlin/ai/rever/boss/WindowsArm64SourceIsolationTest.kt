@@ -46,6 +46,8 @@ class WindowsArm64SourceIsolationTest {
             "/plugin/PluginStateBridge.kt",
             "/plugin/ProtectedPluginProcessConfig.kt",
             "/plugin/ProtectedPluginIpcEndpoint.kt",
+            "/plugin/ProtectedPluginPolicy.kt",
+            "/plugin/ValidatedPluginSandboxRequest.kt",
         )
 
     /** The `desktopTest` mirror: the two directories, plus tests naming boss-ipc types. */

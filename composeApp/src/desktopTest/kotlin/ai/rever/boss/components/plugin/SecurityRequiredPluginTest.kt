@@ -61,6 +61,16 @@ class SecurityRequiredPluginTest {
         assertFalse(result.isSuccess)
     }
 
+    @Test
+    fun `sandbox capabilities require the protected launch marker`() {
+        val jar = writeJar("{\"sandbox\":{\"network\":[\"https://example.test\"]}}")
+
+        val result = SecurityRequiredPlugin.readRequirement(jar.toString())
+
+        assertTrue(result.isFailure)
+        assertFalse(result.isSuccess)
+    }
+
     private fun writeJar(manifest: String): Path {
         val jar = tempDir.resolve("plugin.jar")
         JarOutputStream(jar.outputStream()).use { output ->

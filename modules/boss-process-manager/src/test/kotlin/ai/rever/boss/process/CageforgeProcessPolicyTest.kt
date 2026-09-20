@@ -180,6 +180,29 @@ class CageforgeProcessPolicyTest {
     }
 
     @Test
+    fun `policy ceiling only accepts requested roots already inside its ceiling`() {
+        val parent = Files.createTempDirectory("cageforge-ceiling-roots-")
+        val approved = Files.createDirectories(parent.resolve("approved"))
+        val requested = Files.createDirectories(approved.resolve("models"))
+        val outside = Files.createDirectories(parent.resolve("outside"))
+        try {
+            val ceiling =
+                CageforgePolicyCeiling.forWorkspace(
+                    approved.toFile(),
+                    readOnlyRoots = listOf(outside.toFile()),
+                )
+
+            val policy = ceiling.policyFor(approved.toFile(), additionalReadOnlyRoots = listOf(requested.toFile()))
+            assertTrue(requested.toFile().canonicalPath in policy.toml)
+            assertFailsWith<IllegalArgumentException> {
+                ceiling.policyFor(approved.toFile(), additionalReadOnlyRoots = listOf(parent.toFile()))
+            }
+        } finally {
+            parent.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `bootstrap environment protocol is portable and does not require a path`() {
         val ready = "BOSS-CAGEFORGE-BOOTSTRAP-READY\n".toByteArray(Charsets.US_ASCII)
         val encoded = ByteArrayOutputStream()
