@@ -14,6 +14,7 @@ import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Resolves IPC addresses for inter-process communication.
@@ -30,6 +31,11 @@ object IpcAddressResolver {
     private val isWindows = System.getProperty("os.name").lowercase().contains("win")
     private val isMacOS = System.getProperty("os.name").lowercase().contains("mac")
     private val isLinux = System.getProperty("os.name").lowercase().contains("linux")
+
+    /** Existing ordinary-process Windows IPC uses authenticated loopback TCP. */
+    private const val TCP_PORT_BASE = 57000
+    private const val TCP_PORT_RANGE = 100
+    private val tcpPortCache = ConcurrentHashMap<String, Int>()
 
     /** Base directory for IPC socket files */
     private val ipcDir: File by lazy {
@@ -76,6 +82,23 @@ object IpcAddressResolver {
             val socketFile = File(ipcDir, "boss-$processType-$processId.sock")
             "unix://${socketFile.absolutePath}"
         }
+    }
+
+    /**
+     * Resolve the endpoint for an ordinary process while preserving the legacy Windows transport.
+     * Protected Cageforge processes must use [resolveAddress] so their named pipe can be allowlisted.
+     */
+    fun resolveUnprotectedAddress(
+        processType: String,
+        processId: String,
+    ): String {
+        validateProcessIdentifier(processType)
+        validateProcessIdentifier(processId)
+        if (!isWindows) return resolveAddress(processType, processId)
+
+        val key = "$processType:$processId"
+        val port = tcpPortCache.computeIfAbsent(key) { findAvailableTcpPort() }
+        return "tcp://localhost:$port"
     }
 
     /**
@@ -260,5 +283,16 @@ object IpcAddressResolver {
             // Non-fatal: log but continue. Some filesystems don't support POSIX permissions.
             logger.warn("Could not set socket permissions for {}: {}", path, e.message)
         }
+    }
+
+    private fun findAvailableTcpPort(): Int {
+        for (port in TCP_PORT_BASE until TCP_PORT_BASE + TCP_PORT_RANGE) {
+            try {
+                java.net.ServerSocket(port).use { return port }
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        throw IllegalStateException("No available TCP ports in range $TCP_PORT_BASE-${TCP_PORT_BASE + TCP_PORT_RANGE}")
     }
 }

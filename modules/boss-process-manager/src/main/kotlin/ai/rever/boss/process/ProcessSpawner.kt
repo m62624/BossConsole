@@ -57,10 +57,17 @@ class ProcessSpawner
             // Validate before socket or log creation, not after a caller-selected directory is made.
             IpcAddressResolver.validateProcessIdentifier(config.processId)
             val ipcAddress =
-                IpcAddressResolver.resolveAddress(
-                    config.processType.name.lowercase(),
-                    config.processId,
-                )
+                if (config.cageforge == null) {
+                    IpcAddressResolver.resolveUnprotectedAddress(
+                        config.processType.name.lowercase(),
+                        config.processId,
+                    )
+                } else {
+                    IpcAddressResolver.resolveAddress(
+                        config.processType.name.lowercase(),
+                        config.processId,
+                    )
+                }
 
             val command = buildCommand(config)
 

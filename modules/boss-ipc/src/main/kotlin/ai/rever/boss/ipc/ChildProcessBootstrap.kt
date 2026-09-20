@@ -53,7 +53,7 @@ class ChildProcessBootstrap {
 
     val processAddress: String by lazy {
         System.getenv("BOSS_IPC_ADDR")
-            ?: IpcAddressResolver.resolveAddress(processType.lowercase(), processId)
+            ?: IpcAddressResolver.resolveUnprotectedAddress(processType.lowercase(), processId)
     }
 
     /**
