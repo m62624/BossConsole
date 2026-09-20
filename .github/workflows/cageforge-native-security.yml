@@ -217,6 +217,16 @@ jobs:
             --console=plain \
             --stacktrace
 
+      - name: Collect macOS Seatbelt diagnostics
+        if: failure()
+        run: |
+          set +e
+          log show --last 5m --style compact \
+            --predicate 'process == "sandboxd" OR eventMessage CONTAINS[c] "deny"' \
+            > "$RUNNER_TEMP/cageforge-macos-sandbox.log"
+          tail -n 2000 "$RUNNER_TEMP/cageforge-macos-sandbox.log" > \
+            "$RUNNER_TEMP/cageforge-macos-sandbox-tail.log"
+
       - name: Upload macOS native security test results
         if: always()
         uses: actions/upload-artifact@v7
@@ -225,6 +235,7 @@ jobs:
           path: |
             modules/boss-process-manager/build/test-results/nativeSecurityTest/
             modules/boss-process-manager/build/reports/tests/nativeSecurityTest/
+            ${{ runner.temp }}/cageforge-macos-sandbox-tail.log
           if-no-files-found: warn
           retention-days: 7
 
