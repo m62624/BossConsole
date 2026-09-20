@@ -94,7 +94,10 @@ val nativeSecurityTestBundle =
             into("classes")
         }
         from({
-            nativeSecurityTestSourceSet.runtimeClasspath.files.filter(File::isFile)
+            (sourceSets.main.get().runtimeClasspath.files +
+                nativeSecurityTestSourceSet.runtimeClasspath.files)
+                .filter(File::isFile)
+                .distinct()
         }) {
             into("lib")
         }
