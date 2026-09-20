@@ -219,6 +219,7 @@ class CageforgeNativeSecuritySmokeTest {
                 "BOSS_SMOKE_JAVA" to javaExecutable,
                 "BOSS_SMOKE_CLASSPATH" to classpath,
                 "BOSS_SMOKE_GRANDCHILD" to workspace.resolve("grandchild-created.txt").toString(),
+                "BOSS_SMOKE_RESULT" to workspace.resolve("probe-result.txt").toString(),
             )
         val readRoots =
             classpathRoots(classpath) +
@@ -250,7 +251,15 @@ class CageforgeNativeSecuritySmokeTest {
             process.waitFor(10, TimeUnit.SECONDS),
             "native security probe did not exit before output collection",
         )
-        val output = readAvailableOutput(process)
+        val output =
+            if (isWindows()) {
+                awaitFileText(workspace.resolve("probe-result.txt"))
+            } else {
+                process.inputStream
+                    .bufferedReader()
+                    .readLines()
+                    .joinToString("\n")
+            }
         assertTrue(output.contains("probe-ready"), output)
         assertTrue(output.contains("explicit-channel-value"), output)
         assertTrue(output.contains("outside-denied"), output)
@@ -530,23 +539,32 @@ object CageforgeNativeProbe {
     fun main(args: Array<String>) {
         val workspace = File(System.getProperty("user.dir"))
         val marker = workspace.toPath().resolve("child-created.txt")
+        val result = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_RESULT")))
+        val statuses = mutableListOf<String>()
+
+        fun report(status: String) {
+            statuses += status
+            println(status)
+            Files.writeString(result, statuses.joinToString("\n"))
+        }
+
         marker.parent?.createDirectories()
         Files.writeString(marker, "created")
-        println("probe-ready")
-        println(System.getenv("BOSS_SMOKE_VALUE"))
+        report("probe-ready")
+        report(requireNotNull(System.getenv("BOSS_SMOKE_VALUE")))
 
         val outside = Path.of(requireNotNull(System.getenv("BOSS_SMOKE_OUTSIDE")))
         runCatching { Files.writeString(outside, "forbidden") }
-            .onSuccess { println("outside-created") }
-            .onFailure { println("outside-denied") }
+            .onSuccess { report("outside-created") }
+            .onFailure { report("outside-denied") }
 
         val port = requireNotNull(System.getenv("BOSS_SMOKE_PORT")).toInt()
         runCatching {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress("127.0.0.1", port), 500)
             }
-        }.onSuccess { println("network-allowed") }
-            .onFailure { println("network-denied") }
+        }.onSuccess { report("network-allowed") }
+            .onFailure { report("network-denied") }
 
         val grandchild =
             ProcessBuilder(
@@ -557,6 +575,7 @@ object CageforgeNativeProbe {
             ).inheritIO().start()
         check(grandchild.waitFor(10, TimeUnit.SECONDS)) { "grandchild did not exit" }
         check(grandchild.exitValue() == 0) { "grandchild exited ${grandchild.exitValue()}" }
+        report("grandchild-ready")
     }
 }
 
