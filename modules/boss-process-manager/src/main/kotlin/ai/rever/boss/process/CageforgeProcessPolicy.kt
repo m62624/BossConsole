@@ -87,7 +87,7 @@ data class CageforgeProcessPolicy(
                     .map(::validatedWindowsNamedPipe)
             validateEndpointPlatform(unixSocketPaths, namedPipeNames)
             val ipcParentRoots = unixSocketPaths.map(::localIpcParent).distinctBy { it.path }
-            val effectiveReadOnlyRoots = additionalRoots.filterNot { it in ipcParentRoots }
+            val effectiveReadOnlyRoots = effectiveReadOnlyRoots(additionalRoots, ipcParentRoots)
 
             return CageforgeProcessPolicy(
                 CageforgeTomlBuilder.build(
@@ -157,6 +157,25 @@ data class CageforgeProcessPolicy(
         }
     }
 }
+
+private fun macOsRuntimeReadOnlyRoots(): List<File> {
+    if (!System.getProperty("os.name").contains("mac", ignoreCase = true)) return emptyList()
+    return buildList {
+        File("/System/Cryptexes/OS").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+        File(System.getProperty("user.home"), ".CFUserTextEncoding")
+            .canonicalFile
+            .takeIf { it.isFile }
+            ?.let(::add)
+    }
+}
+
+private fun effectiveReadOnlyRoots(
+    additionalRoots: List<File>,
+    ipcParentRoots: List<File>,
+): List<File> =
+    (additionalRoots + macOsRuntimeReadOnlyRoots())
+        .filterNot { it in ipcParentRoots }
+        .distinctBy { it.path }
 
 /**
  * Host-owned immutable ceiling for a protected launch.
