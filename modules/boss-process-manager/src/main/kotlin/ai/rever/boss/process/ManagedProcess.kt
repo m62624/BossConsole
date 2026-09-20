@@ -72,7 +72,9 @@ class ManagedProcess(
         }
     }
 
-    internal fun closeNativeResources() {
+    /** Closes native process resources after the child has terminated. */
+    fun closeNativeResources() {
+        check(!process.isAlive) { "Native process resources cannot close while the child is alive" }
         nativeCleanup?.invoke()
     }
 }
