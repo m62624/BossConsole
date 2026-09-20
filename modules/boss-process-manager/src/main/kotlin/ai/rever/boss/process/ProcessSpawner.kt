@@ -9,6 +9,37 @@ import ai.rever.boss.ipc.auth.IpcTlsIdentity
 import ai.rever.boss.ipc.auth.ProcessTokenRegistry
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.util.concurrent.TimeUnit
+
+private const val CAGEFORGE_TERMINATION_TIMEOUT_MS = 10_000L
+
+private fun terminateFailedCageforgeProcess(
+    child: CageforgeProcess,
+    failure: Throwable,
+) {
+    runCatching {
+        child.destroyForcibly()
+        if (
+            !child.waitFor(
+                CAGEFORGE_TERMINATION_TIMEOUT_MS,
+                TimeUnit.MILLISECONDS,
+            )
+        ) {
+            failure.addSuppressed(
+                IllegalStateException(
+                    "Cageforge child did not terminate within " +
+                        "$CAGEFORGE_TERMINATION_TIMEOUT_MS ms",
+                ),
+            )
+        }
+    }.onFailure { cleanupFailure ->
+        if (cleanupFailure is InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        failure.addSuppressed(cleanupFailure)
+    }
+    runCatching { child.close() }.onFailure(failure::addSuppressed)
+}
 
 /**
  * Spawns child processes (either GraalVM native images or JVM subprocesses).
@@ -175,10 +206,8 @@ class ProcessSpawner
                     config.startupTimeoutMs,
                 )
                 process
-            }.onFailure {
-                child?.destroyForcibly()
-                child?.onExit()?.join()
-                child?.close()
+            }.onFailure { error ->
+                child?.let { terminateFailedCageforgeProcess(it, error) }
                 runtime.close()
             }.getOrThrow()
         }
