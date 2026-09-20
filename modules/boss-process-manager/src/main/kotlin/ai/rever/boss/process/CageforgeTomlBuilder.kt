@@ -117,7 +117,7 @@ internal object CageforgeTomlBuilder {
     }
 
     private fun runtimePolicy(executableRoots: List<File>): String {
-        if (executableRoots.isEmpty()) return ""
+        if (executableRoots.isEmpty() || CageforgePlatform.current() != CageforgePlatform.MACOS) return ""
         val roots = executableRoots.joinToString(", ") { tomlString(it.path) }
         return "[profiles.$CAGEFORGE_PROFILE_NAME.platforms.macos.runtime]\n" +
             "executable_roots = [$roots]"

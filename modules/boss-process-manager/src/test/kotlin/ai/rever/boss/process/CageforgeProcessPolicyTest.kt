@@ -56,8 +56,12 @@ class CageforgeProcessPolicyTest {
                     .replace("\\", "\\\\")
                     .replace("\"", "\\\"")
 
-            assertTrue("[profiles.boss-protected.platforms.macos.runtime]" in policy.toml)
-            assertTrue("executable_roots = [\"$escapedRuntimeRoot\"]" in policy.toml)
+            if (CageforgePlatform.current() == CageforgePlatform.MACOS) {
+                assertTrue("[profiles.boss-protected.platforms.macos.runtime]" in policy.toml)
+                assertTrue("executable_roots = [\"$escapedRuntimeRoot\"]" in policy.toml)
+            } else {
+                assertFalse("runtime.executable_roots" in policy.toml)
+            }
         } finally {
             runtimeRoot.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
