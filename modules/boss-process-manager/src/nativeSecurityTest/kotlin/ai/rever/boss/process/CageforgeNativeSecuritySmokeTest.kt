@@ -179,7 +179,12 @@ class CageforgeNativeSecuritySmokeTest {
                             "BOSS_SMOKE_KILL_READY" to ready.toString(),
                             "BOSS_SMOKE_LATE_MARKER" to lateMarker.toString(),
                         ),
-                    cageforge = CageforgeProcessPolicy.workspace(workspace.toFile(), readRoots),
+                    cageforge =
+                        CageforgeProcessPolicy.workspace(
+                            workspace.toFile(),
+                            readRoots,
+                            runtimeExecutableRoots = runtimeExecutableRoots(),
+                        ),
                 )
 
             managed = ProcessSpawner("native-security-kill", logs.toFile()).spawn(config)
@@ -226,7 +231,12 @@ class CageforgeNativeSecuritySmokeTest {
             classpath = classpath,
             workDir = workspace.toFile(),
             environment = childEnvironment,
-            cageforge = CageforgeProcessPolicy.workspace(workspace.toFile(), readRoots),
+            cageforge =
+                CageforgeProcessPolicy.workspace(
+                    workspace.toFile(),
+                    readRoots,
+                    runtimeExecutableRoots = runtimeExecutableRoots(),
+                ),
         )
     }
 
@@ -411,6 +421,7 @@ private fun authenticatedIpcConfig(
                     listOf(kernelAddress, processAddress).map(
                         ::nativeLocalIpcEndpoint,
                     ),
+                runtimeExecutableRoots = runtimeExecutableRoots(),
             ),
     )
 }
@@ -470,6 +481,7 @@ private fun createLocalIpcConfig(
                 workspace.toFile(),
                 readRoots,
                 localIpcPaths = listOf(allowedSocket.toString()),
+                runtimeExecutableRoots = runtimeExecutableRoots(),
             ),
     )
 }
@@ -490,6 +502,11 @@ private fun readSocketByte(server: ServerSocketChannel?): Byte {
 }
 
 private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+
+private fun runtimeExecutableRoots(): List<File> =
+    listOf(
+        File(System.getProperty("java.home")).canonicalFile,
+    )
 
 private fun awaitFileText(path: Path): String {
     repeat(200) {

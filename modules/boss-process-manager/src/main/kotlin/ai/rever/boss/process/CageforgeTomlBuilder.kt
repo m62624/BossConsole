@@ -4,23 +4,28 @@ import java.io.File
 
 internal const val CAGEFORGE_PROFILE_NAME = "boss-protected"
 
+internal data class CageforgeLocalIpcPolicy(
+    val parentRoots: List<File>,
+    val unixSocketPaths: List<String>,
+    val namedPipeNames: List<String>,
+)
+
 /** Builds the single BOSS-owned Cageforge profile used by protected launches. */
 internal object CageforgeTomlBuilder {
     fun build(
         root: File,
         readOnlyRoots: List<File>,
-        ipcParentRoots: List<File>,
-        unixSocketPaths: List<String>,
-        namedPipeNames: List<String>,
+        localIpc: CageforgeLocalIpcPolicy,
+        runtimeExecutableRoots: List<File> = emptyList(),
     ): String {
-        val filesystemRules = filesystemRules(readOnlyRoots, ipcParentRoots)
+        val filesystemRules = filesystemRules(readOnlyRoots, localIpc.parentRoots)
         val allFilesystemRules =
             buildList {
                 add("  { target = \"minimal\", access = \"read\" }")
                 addAll(filesystemRules)
                 add("  { target = \"workspace-root\", access = \"write\" }")
             }.joinToString(",\n")
-        val localIpcPolicy = localIpcPolicy(unixSocketPaths, namedPipeNames)
+        val localIpcToml = renderLocalIpcPolicy(localIpc.unixSocketPaths, localIpc.namedPipeNames)
         return buildString {
             appendLine("default_profile = \"$CAGEFORGE_PROFILE_NAME\"")
             appendLine()
@@ -40,7 +45,9 @@ internal object CageforgeTomlBuilder {
             appendLine()
             appendLine(networkPolicy())
             appendLine()
-            appendLine(localIpcPolicy)
+            appendLine(localIpcToml)
+            appendLine()
+            appendLine(runtimePolicy(runtimeExecutableRoots))
             appendLine()
             appendLine("[profiles.$CAGEFORGE_PROFILE_NAME.command]")
             appendLine("program = \"java\"")
@@ -76,7 +83,7 @@ internal object CageforgeTomlBuilder {
             "mode = \"disabled\"",
         ).joinToString("\n")
 
-    private fun localIpcPolicy(
+    private fun renderLocalIpcPolicy(
         unixSocketPaths: List<String>,
         namedPipeNames: List<String>,
     ): String {
@@ -100,6 +107,24 @@ internal object CageforgeTomlBuilder {
                 val pipes = namedPipeNames.joinToString(", ") { tomlString(it) }
                 "[profiles.$CAGEFORGE_PROFILE_NAME.platforms.windows.local_ipc]\n" +
                     "named_pipes = [$pipes]"
+            }
+        }
+    }
+
+    private fun runtimePolicy(runtimeExecutableRoots: List<File>): String {
+        if (runtimeExecutableRoots.isEmpty()) return ""
+        return when (val platform = CageforgePlatform.current()) {
+            CageforgePlatform.MACOS -> {
+                "[profiles.$CAGEFORGE_PROFILE_NAME.platforms.${platform.tomlName}.runtime]\n" +
+                    "executable_roots = [" +
+                    runtimeExecutableRoots.joinToString(", ") { tomlString(it.path) } +
+                    "]"
+            }
+
+            CageforgePlatform.LINUX,
+            CageforgePlatform.WINDOWS,
+            -> {
+                ""
             }
         }
     }

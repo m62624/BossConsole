@@ -34,6 +34,12 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
         } else {
             emptyList()
         }
+    val executableRoots =
+        if (input.securityRequired) {
+            protectedExecutableRoots(nativeImage)
+        } else {
+            emptyList()
+        }
     val processId = pluginProcessId(input.windowId, manifest.pluginId)
     val localIpcEndpoints =
         if (input.securityRequired) {
@@ -63,7 +69,11 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
             if (input.securityRequired) {
                 CageforgePolicyCeiling
                     .forWorkspace(workDir, protectedRoots)
-                    .policyFor(workDir, localIpcEndpoints = localIpcEndpoints)
+                    .policyFor(
+                        workDir,
+                        localIpcEndpoints = localIpcEndpoints,
+                        runtimeExecutableRoots = executableRoots,
+                    )
             } else {
                 null
             },
