@@ -316,7 +316,7 @@ jobs:
             --no-daemon \
             --max-workers=2 \
             --console=plain
-          stage="$RUNNER_TEMP/boss-native-security-runtime"
+          stage="$(cygpath -m "$RUNNER_TEMP")/boss-native-security-runtime"
           rm -rf "$stage"
           mkdir -p "$stage"
           tar -xzf \
