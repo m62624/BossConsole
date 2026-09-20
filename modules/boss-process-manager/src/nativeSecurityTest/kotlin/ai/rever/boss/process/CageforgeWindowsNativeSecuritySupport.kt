@@ -90,6 +90,10 @@ internal object CageforgeWindowsNativeSecuritySupport {
                     readRoots,
                     localIpcEndpoints =
                         listOf(servers.allowedAddress).map(::nativeLocalIpcEndpoint),
+                    runtimeExecutableRoots =
+                        listOf(
+                            File(System.getProperty("java.home")).canonicalFile,
+                        ),
                 ),
         )
     }

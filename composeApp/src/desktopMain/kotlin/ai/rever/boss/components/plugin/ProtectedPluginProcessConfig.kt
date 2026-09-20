@@ -32,7 +32,7 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
         if (input.securityRequired) {
             protectedClasspathRoots(classpath, nativeImage)
         } else {
-            emptyList()
+            ProtectedRoots(emptyList(), emptyList())
         }
     val processId = pluginProcessId(input.windowId, manifest.pluginId)
     val localIpcEndpoints =
@@ -62,8 +62,11 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
         cageforge =
             if (input.securityRequired) {
                 CageforgePolicyCeiling
-                    .forWorkspace(workDir, protectedRoots)
-                    .policyFor(workDir, localIpcEndpoints = localIpcEndpoints)
+                    .forWorkspace(
+                        workDir,
+                        protectedRoots.readOnlyRoots,
+                        runtimeExecutableRoots = protectedRoots.executableRoots,
+                    ).policyFor(workDir, localIpcEndpoints = localIpcEndpoints)
             } else {
                 null
             },
@@ -139,45 +142,63 @@ private fun validateNativeImage(
     }
 }
 
+private data class ProtectedRoots(
+    val readOnlyRoots: List<File>,
+    val executableRoots: List<File>,
+)
+
 private fun protectedClasspathRoots(
     classpath: String,
     nativeImage: String?,
-): List<File> =
-    buildList {
-        addAll(classpathRoots(System.getProperty("java.class.path")))
-        addAll(classpathRoots(classpath))
-        val javaHome =
-            File(System.getProperty("java.home"))
-                .also {
-                    require(it.isAbsolute && it.isDirectory) {
-                        "java.home must be an absolute directory: ${it.path}"
-                    }
-                }.normalize()
-        add(javaHome)
-        File(javaHome, "conf").canonicalFile.takeIf { it.isDirectory }?.let(::add)
-        File(javaHome, "conf/security").canonicalFile.takeIf { it.isDirectory }?.let(::add)
-        File(javaHome, "conf/security/policy").canonicalFile.takeIf { it.isDirectory }?.let(::add)
-        File(javaHome, "conf/security/policy/unlimited").canonicalFile.takeIf { it.isDirectory }?.let(::add)
-        File(javaHome, "conf/security/policy/unlimited/default_US_export.policy")
-            .canonicalFile
-            .takeIf { it.isFile }
-            ?.let(::add)
-        File(javaHome, "conf/security/policy/unlimited/default_local.policy")
-            .canonicalFile
-            .takeIf { it.isFile }
-            ?.let(::add)
-        File(javaHome, "conf/security/java.security.d").canonicalFile.takeIf { it.isDirectory }?.let(::add)
-        File(javaHome, "conf/security/java.security").canonicalFile.takeIf { it.isFile }?.let(::add)
-        add(
-            File(ProcessSpawner.findJavaExecutable())
-                .also {
-                    require(it.isAbsolute && it.isFile && it.canExecute()) {
-                        "Protected Java executable must be absolute and executable: ${it.path}"
-                    }
-                }.normalize(),
-        )
-        nativeImage?.let(::File)?.let(::add)
-    }.distinctBy { it.path }
+): ProtectedRoots {
+    val javaHome =
+        File(System.getProperty("java.home"))
+            .also {
+                require(it.isAbsolute && it.isDirectory) {
+                    "java.home must be an absolute directory: ${it.path}"
+                }
+            }.canonicalFile
+    val readOnlyRoots =
+        buildList {
+            addAll(classpathRoots(System.getProperty("java.class.path")))
+            addAll(classpathRoots(classpath))
+            add(javaHome)
+            File(javaHome, "conf").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+            File(javaHome, "conf/security").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+            File(javaHome, "conf/security/policy").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+            File(javaHome, "conf/security/policy/unlimited").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+            File(javaHome, "conf/security/policy/unlimited/default_US_export.policy")
+                .canonicalFile
+                .takeIf { it.isFile }
+                ?.let(::add)
+            File(javaHome, "conf/security/policy/unlimited/default_local.policy")
+                .canonicalFile
+                .takeIf { it.isFile }
+                ?.let(::add)
+            File(javaHome, "conf/security/java.security.d").canonicalFile.takeIf { it.isDirectory }?.let(::add)
+            File(javaHome, "conf/security/java.security").canonicalFile.takeIf { it.isFile }?.let(::add)
+            add(
+                File(ProcessSpawner.findJavaExecutable())
+                    .also {
+                        require(it.isAbsolute && it.isFile && it.canExecute()) {
+                            "Protected Java executable must be absolute and executable: ${it.path}"
+                        }
+                    }.normalize(),
+            )
+            nativeImage?.let(::File)?.let(::add)
+        }.distinctBy { it.path }
+    val executableRoots =
+        buildList {
+            add(javaHome)
+            nativeImage
+                ?.let(::File)
+                ?.canonicalFile
+                ?.parentFile
+                ?.takeIf { it.isDirectory }
+                ?.let(::add)
+        }.distinctBy { it.path }
+    return ProtectedRoots(readOnlyRoots, executableRoots)
+}
 
 private fun buildJvmArgs(
     workDir: File,

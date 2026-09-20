@@ -40,6 +40,7 @@ data class CageforgeProcessPolicy(
             readOnlyRoots: Iterable<File> = emptyList(),
             localIpcPaths: Iterable<String> = emptyList(),
             localIpcEndpoints: Iterable<CageforgeLocalIpcEndpoint> = emptyList(),
+            runtimeExecutableRoots: Iterable<File> = emptyList(),
         ): CageforgeProcessPolicy {
             require(workspace.isAbsolute) { "Cageforge workspace must be absolute" }
             val root = workspace.canonicalFile
@@ -54,6 +55,19 @@ data class CageforgeProcessPolicy(
                         require(it.exists()) { "Cageforge read-only root does not exist: ${it.path}" }
                     }.filterNot { it == root }
                     .distinctBy { it.path }
+
+            val executableRoots =
+                runtimeExecutableRoots
+                    .map {
+                        require(it.isAbsolute) {
+                            "Cageforge runtime executable root must be absolute: ${it.path}"
+                        }
+                        it.canonicalFile
+                    }.onEach {
+                        require(it.isDirectory) {
+                            "Cageforge runtime executable root does not exist: ${it.path}"
+                        }
+                    }.distinctBy { it.path }
 
             val endpoints =
                 localIpcPaths
@@ -80,8 +94,12 @@ data class CageforgeProcessPolicy(
                     root = root,
                     readOnlyRoots = effectiveReadOnlyRoots,
                     ipcParentRoots = ipcParentRoots,
-                    unixSocketPaths = unixSocketPaths,
-                    namedPipeNames = namedPipeNames,
+                    platformPolicy =
+                        CageforgeTomlPlatformPolicy(
+                            unixSocketPaths = unixSocketPaths,
+                            namedPipeNames = namedPipeNames,
+                            runtimeExecutableRoots = executableRoots,
+                        ),
                 ),
                 CAGEFORGE_PROFILE_NAME,
             )
@@ -150,6 +168,7 @@ data class CageforgeProcessPolicy(
 class CageforgePolicyCeiling private constructor(
     val allowedWorkspaceRoot: File,
     private val readOnlyRoots: List<File>,
+    private val runtimeExecutableRoots: List<File>,
 ) {
     init {
         require(allowedWorkspaceRoot.isAbsolute) {
@@ -160,6 +179,9 @@ class CageforgePolicyCeiling private constructor(
         }
         require(readOnlyRoots.all { it.isAbsolute && it.exists() }) {
             "Cageforge policy ceiling contains an invalid read-only root"
+        }
+        require(runtimeExecutableRoots.all { it.isAbsolute && it.isDirectory }) {
+            "Cageforge policy ceiling contains an invalid runtime executable root"
         }
     }
 
@@ -182,6 +204,7 @@ class CageforgePolicyCeiling private constructor(
             readOnlyRoots,
             localIpcPaths,
             localIpcEndpoints,
+            runtimeExecutableRoots = this.runtimeExecutableRoots,
         )
     }
 
@@ -189,6 +212,7 @@ class CageforgePolicyCeiling private constructor(
         fun forWorkspace(
             allowedWorkspaceRoot: File,
             readOnlyRoots: Iterable<File> = emptyList(),
+            runtimeExecutableRoots: Iterable<File> = emptyList(),
         ): CageforgePolicyCeiling {
             require(allowedWorkspaceRoot.isAbsolute) {
                 "Cageforge policy ceiling root must be absolute"
@@ -203,7 +227,23 @@ class CageforgePolicyCeiling private constructor(
                         require(it.isAbsolute) { "Cageforge read-only root must be absolute" }
                         it.canonicalFile
                     }.toList()
-            return CageforgePolicyCeiling(canonicalRoot, canonicalReadOnlyRoots)
+            val canonicalExecutableRoots =
+                runtimeExecutableRoots
+                    .map {
+                        require(it.isAbsolute) {
+                            "Cageforge runtime executable root must be absolute: ${it.path}"
+                        }
+                        it.canonicalFile
+                    }.onEach {
+                        require(it.isDirectory) {
+                            "Cageforge runtime executable root does not exist: ${it.path}"
+                        }
+                    }.distinctBy { it.path }
+            return CageforgePolicyCeiling(
+                canonicalRoot,
+                canonicalReadOnlyRoots,
+                canonicalExecutableRoots,
+            )
         }
     }
 }

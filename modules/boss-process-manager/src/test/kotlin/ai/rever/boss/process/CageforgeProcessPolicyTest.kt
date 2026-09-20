@@ -40,6 +40,31 @@ class CageforgeProcessPolicyTest {
     }
 
     @Test
+    fun `workspace preset maps host runtime roots for macOS executable access`() {
+        val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
+        val runtimeRoot = Files.createTempDirectory("cageforge-policy-runtime-")
+        try {
+            val policy =
+                CageforgeProcessPolicy.workspace(
+                    workspace.toFile(),
+                    runtimeExecutableRoots = listOf(runtimeRoot.toFile()),
+                )
+            val escapedRuntimeRoot =
+                runtimeRoot
+                    .toFile()
+                    .canonicalPath
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+
+            assertTrue("[profiles.boss-protected.platforms.macos.runtime]" in policy.toml)
+            assertTrue("executable_roots = [\"$escapedRuntimeRoot\"]" in policy.toml)
+        } finally {
+            runtimeRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `workspace preset restricts local IPC to host-owned endpoints`() {
         val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
         try {
@@ -124,6 +149,12 @@ class CageforgeProcessPolicyTest {
         try {
             assertFailsWith<IllegalArgumentException> {
                 CageforgeProcessPolicy.workspace(workspace.toFile(), listOf(File("relative-runtime")))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                CageforgeProcessPolicy.workspace(
+                    workspace.toFile(),
+                    runtimeExecutableRoots = listOf(File("relative-runtime")),
+                )
             }
         } finally {
             workspace.toFile().deleteRecursively()

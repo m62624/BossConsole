@@ -4,14 +4,19 @@ import java.io.File
 
 internal const val CAGEFORGE_PROFILE_NAME = "boss-protected"
 
+internal data class CageforgeTomlPlatformPolicy(
+    val unixSocketPaths: List<String>,
+    val namedPipeNames: List<String>,
+    val runtimeExecutableRoots: List<File>,
+)
+
 /** Builds the single BOSS-owned Cageforge profile used by protected launches. */
 internal object CageforgeTomlBuilder {
     fun build(
         root: File,
         readOnlyRoots: List<File>,
         ipcParentRoots: List<File>,
-        unixSocketPaths: List<String>,
-        namedPipeNames: List<String>,
+        platformPolicy: CageforgeTomlPlatformPolicy,
     ): String {
         val filesystemRules = filesystemRules(readOnlyRoots, ipcParentRoots)
         val allFilesystemRules =
@@ -20,7 +25,12 @@ internal object CageforgeTomlBuilder {
                 addAll(filesystemRules)
                 add("  { target = \"workspace-root\", access = \"write\" }")
             }.joinToString(",\n")
-        val localIpcPolicy = localIpcPolicy(unixSocketPaths, namedPipeNames)
+        val localIpcPolicy =
+            localIpcPolicy(
+                platformPolicy.unixSocketPaths,
+                platformPolicy.namedPipeNames,
+            )
+        val runtimePolicy = runtimePolicy(platformPolicy.runtimeExecutableRoots)
         return buildString {
             appendLine("default_profile = \"$CAGEFORGE_PROFILE_NAME\"")
             appendLine()
@@ -41,6 +51,8 @@ internal object CageforgeTomlBuilder {
             appendLine(networkPolicy())
             appendLine()
             appendLine(localIpcPolicy)
+            appendLine()
+            appendLine(runtimePolicy)
             appendLine()
             appendLine("[profiles.$CAGEFORGE_PROFILE_NAME.command]")
             appendLine("program = \"java\"")
@@ -102,6 +114,13 @@ internal object CageforgeTomlBuilder {
                     "named_pipes = [$pipes]"
             }
         }
+    }
+
+    private fun runtimePolicy(executableRoots: List<File>): String {
+        if (executableRoots.isEmpty()) return ""
+        val roots = executableRoots.joinToString(", ") { tomlString(it.path) }
+        return "[profiles.$CAGEFORGE_PROFILE_NAME.platforms.macos.runtime]\n" +
+            "executable_roots = [$roots]"
     }
 
     private fun tomlString(value: String): String {
