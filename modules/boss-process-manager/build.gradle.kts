@@ -47,7 +47,7 @@ dependencies {
 val nativeSecurityTestSourceSet = sourceSets.create("nativeSecurityTest")
 nativeSecurityTestSourceSet.kotlin.srcDir("src/nativeSecurityTest/kotlin")
 nativeSecurityTestSourceSet.compileClasspath += sourceSets.main.get().output
-nativeSecurityTestSourceSet.runtimeClasspath += sourceSets.main.get().output
+nativeSecurityTestSourceSet.runtimeClasspath += sourceSets.main.get().runtimeClasspath
 
 configurations[nativeSecurityTestSourceSet.implementationConfigurationName]
     .extendsFrom(configurations.testImplementation.get())
