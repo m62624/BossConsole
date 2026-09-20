@@ -30,7 +30,7 @@ internal object CageforgeWindowsNativeSecuritySupport {
                 assertTrue(output.contains("blocked-ipc-denied"), output)
                 assertEquals(0, managed.process.exitValue())
             } finally {
-                terminateWindowsProcess(managed.process)
+                terminateWindowsProcess(managed)
             }
         }
     }
@@ -126,11 +126,12 @@ internal object CageforgeWindowsNativeSecuritySupport {
         return Files.readString(path)
     }
 
-    private fun terminateWindowsProcess(process: Process) {
-        process.destroyForcibly()
+    private fun terminateWindowsProcess(managed: ManagedProcess) {
+        managed.process.destroyForcibly()
         assertTrue(
-            process.waitFor(10, TimeUnit.SECONDS),
+            managed.process.waitFor(10, TimeUnit.SECONDS),
             "Windows IPC smoke process did not terminate during cleanup",
         )
+        managed.closeNativeResources()
     }
 }

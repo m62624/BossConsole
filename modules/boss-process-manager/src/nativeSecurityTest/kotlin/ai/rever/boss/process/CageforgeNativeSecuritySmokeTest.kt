@@ -75,7 +75,7 @@ class CageforgeNativeSecuritySmokeTest {
                 assertEquals("ready", state.key)
             }
         } finally {
-            managed?.let { terminateAfterTest(it.process) }
+            managed?.let(::terminateAfterTest)
             server?.stop()
             logs.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
@@ -120,7 +120,7 @@ class CageforgeNativeSecuritySmokeTest {
             if (exited) assertEquals(0, managed.process.exitValue())
             assertEquals('a'.code.toByte(), readSocketByte(allowedServer))
         } finally {
-            managed?.let { terminateAfterTest(it.process) }
+            managed?.let(::terminateAfterTest)
             allowedServer?.close()
             blockedServer?.close()
             logs.toFile().deleteRecursively()
@@ -143,7 +143,7 @@ class CageforgeNativeSecuritySmokeTest {
                 managed = ProcessSpawner("native-security-test", logs.toFile()).spawn(config)
                 assertSmokeResult(managed.process, workspace, outside, server)
             } finally {
-                managed?.let { terminateAfterTest(it.process) }
+                managed?.let(::terminateAfterTest)
             }
         } finally {
             server.close()
@@ -200,7 +200,7 @@ class CageforgeNativeSecuritySmokeTest {
                 "Cageforge kill must terminate descendants before they perform late work",
             )
         } finally {
-            managed?.let { terminateAfterTest(it.process) }
+            managed?.let(::terminateAfterTest)
             logs.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
         }
@@ -302,12 +302,13 @@ class CageforgeNativeSecuritySmokeTest {
         assertTrue(Files.isRegularFile(path), "native kill probe did not become ready: $path")
     }
 
-    private fun terminateAfterTest(process: Process) {
-        process.destroyForcibly()
+    private fun terminateAfterTest(managed: ManagedProcess) {
+        managed.process.destroyForcibly()
         assertTrue(
-            process.waitFor(10, TimeUnit.SECONDS),
+            managed.process.waitFor(10, TimeUnit.SECONDS),
             "native smoke process did not terminate during cleanup",
         )
+        managed.closeNativeResources()
     }
 }
 

@@ -10,8 +10,14 @@ import ai.rever.boss.ipc.auth.ProcessTokenRegistry
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val CAGEFORGE_TERMINATION_TIMEOUT_MS = 10_000L
+
+private data class StartedProcess(
+    val process: Process,
+    val nativeCleanup: (() -> Unit)? = null,
+)
 
 private fun terminateFailedCageforgeProcess(
     child: CageforgeProcess,
@@ -112,7 +118,7 @@ class ProcessSpawner
 
             val logs = ProcessLogStreams.acquire(logDir.toPath(), config.processId)
             var security: SpawnIpcSecurity? = null
-            val process =
+            val started =
                 runCatching {
                     security = SpawnIpcSecurity.create(tokenRegistry, kernelIdentity, config, ipcAddress)
                     security?.install(childEnvironment)
@@ -124,6 +130,7 @@ class ProcessSpawner
                         security?.revoke()
                     }
                 }.getOrThrow()
+            val process = started.process
             process.onExit().thenRun { security?.revoke() }
 
             logger.info(
@@ -137,6 +144,7 @@ class ProcessSpawner
                 config = config,
                 process = process,
                 ipcAddress = ipcAddress,
+                nativeCleanup = started.nativeCleanup,
             ).also {
                 it.ipcClient = security?.client
                 registry?.register(config.processId, it)
@@ -167,21 +175,23 @@ class ProcessSpawner
             config: ProcessConfig,
             environment: Map<String, String>,
             logs: ProcessLogStreams,
-        ): Process {
+        ): StartedProcess {
             if (config.cageforge != null) {
-                return startWithCageforge(command, config, environment).also { attachLogs(it, logs) }
+                return startWithCageforge(command, config, environment).also {
+                    attachLogs(it.process, logs)
+                }
             }
 
             val processBuilder = ProcessBuilder(command).directory(config.workDir)
             processBuilder.environment().putAll(environment)
-            return startWithLogs(processBuilder, logs)
+            return StartedProcess(startWithLogs(processBuilder, logs))
         }
 
         private fun startWithCageforge(
             command: List<String>,
             config: ProcessConfig,
             environment: Map<String, String>,
-        ): Process {
+        ): StartedProcess {
             val policy = checkNotNull(config.cageforge)
             val workDir = validateProtectedWorkDir(config)
             validateProtectedExecutable(command)
@@ -195,20 +205,24 @@ class ProcessSpawner
                     runtimeContext,
                 )
             var child: CageforgeProcess? = null
+            val runtimeClosed = AtomicBoolean(false)
+            val closeRuntime = {
+                if (runtimeClosed.compareAndSet(false, true)) runtime.close()
+            }
             return runCatching {
                 val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
                 child = process
-                process.onExit().whenComplete { _, _ -> runCatching { runtime.close() } }
+                process.onExit().whenComplete { _, _ -> runCatching { closeRuntime() } }
                 ProtectedEnvironmentChannel.send(
                     process.inputStream,
                     process.outputStream,
                     environment,
                     config.startupTimeoutMs,
                 )
-                process
+                StartedProcess(process, closeRuntime)
             }.onFailure { error ->
                 child?.let { terminateFailedCageforgeProcess(it, error) }
-                runtime.close()
+                closeRuntime()
             }.getOrThrow()
         }
 
