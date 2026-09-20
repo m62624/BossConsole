@@ -333,7 +333,7 @@ private class NamedPipeConnection private constructor(
                     WinBase.PIPE_ACCESS_DUPLEX,
                     WinBase.PIPE_TYPE_BYTE or WinBase.PIPE_READMODE_BYTE or WinBase.PIPE_WAIT or
                         WinBase.PIPE_REJECT_REMOTE_CLIENTS,
-                    1,
+                    WinBase.PIPE_UNLIMITED_INSTANCES,
                     64 * 1024,
                     64 * 1024,
                     0,
