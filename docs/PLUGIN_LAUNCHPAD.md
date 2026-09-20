@@ -181,6 +181,42 @@ A failed newest dev build falls back to the installed store build on startup, no
 - Scaffolded starter templates emit `[]` by default so any non-admin developer can build, test, and link without hitting RBAC permission gating (`pluginAccessAllowed`).
 - When non-empty, permissions must follow the standard dot/dash/underscore RBAC identifier format (`^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$`).
 
+### Protected out-of-process plugins
+
+Plugins that execute untrusted or agent-controlled code can opt into the protected launch path by
+declaring `securityRequired: true`. Such a plugin is started out of process through Cageforge; it
+never silently falls back to an in-process or unsandboxed launch when native setup fails.
+
+A protected plugin may declare a bounded capability request in the same manifest:
+
+```json
+{
+  "securityRequired": true,
+  "sandbox": {
+    "filesystem": [
+      { "path": "${workspace}/models", "access": "read" },
+      { "path": "${workspace}/output", "access": "write" }
+    ],
+    "network": [],
+    "localIpc": ["unix:///run/boss/plugin.sock"]
+  }
+}
+```
+
+The request is not a policy or a TOML override. Before the child process is created, BOSS shows
+the requested filesystem, network and local-IPC capabilities to the operator. Approval only
+allows BOSS to evaluate the request against its immutable host policy ceiling; it cannot widen the
+workspace, enable unrestricted networking, or grant an endpoint BOSS did not authorize. Denial,
+timeout, malformed input, or an unsupported native capability fails the protected launch closed.
+The `localIpc` values use `unix://` endpoints on Linux and macOS and `pipe://` endpoints on
+Windows. BOSS-owned control endpoints needed for the protected runtime remain part of the host
+ceiling; a plugin request cannot add another endpoint or replace the native transport.
+
+The existing `requiredPermissions` field remains an RBAC access check. It does not grant operating
+system capabilities and it does not replace the protected sandbox approval. Ordinary in-process
+plugins and ordinary out-of-process plugins without `securityRequired` keep their existing launch
+behavior.
+
 ---
 
 ## Typical Developer Workflow
