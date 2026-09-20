@@ -1,6 +1,7 @@
 import org.gradle.api.tasks.bundling.Compression
 import org.gradle.api.tasks.bundling.Tar
 import org.gradle.api.tasks.testing.Test
+import org.gradle.jvm.tasks.Jar
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -84,9 +85,12 @@ val nativeSecurityTestBundle =
         destinationDirectory.set(layout.buildDirectory.dir("nativeSecurityTest"))
         compression = Compression.GZIP
         val qemuLauncher = rootProject.file("ci/cageforge-qemu-suite/run.sh")
+        val bossIpcJar = project(":boss-ipc").tasks.named<Jar>("jar")
+        val mainRuntimeClasspath = sourceSets.main.get().runtimeClasspath
+        val nativeRuntimeClasspath = nativeSecurityTestSourceSet.runtimeClasspath
         inputs.files(nativeSecurityTestSourceSet.runtimeClasspath)
         inputs.file(qemuLauncher)
-        dependsOn(nativeSecurityTestSourceSet.classesTaskName)
+        dependsOn(nativeSecurityTestSourceSet.classesTaskName, bossIpcJar)
         from(sourceSets.main.get().output) {
             into("classes")
         }
@@ -94,11 +98,16 @@ val nativeSecurityTestBundle =
             into("classes")
         }
         from({
-            (sourceSets.main.get().runtimeClasspath.files +
-                nativeSecurityTestSourceSet.runtimeClasspath.files)
-                .filter(File::isFile)
+            buildList {
+                addAll(mainRuntimeClasspath.files)
+                addAll(nativeRuntimeClasspath.files)
+            }.filter(File::isFile)
+                .filterNot { it.name.startsWith("boss-ipc-") }
                 .distinct()
         }) {
+            into("lib")
+        }
+        from(bossIpcJar.flatMap { it.archiveFile }) {
             into("lib")
         }
         from(qemuLauncher) {
