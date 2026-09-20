@@ -86,11 +86,12 @@ val nativeSecurityTestBundle =
         compression = Compression.GZIP
         val qemuLauncher = rootProject.file("ci/cageforge-qemu-suite/run.sh")
         val bossIpcJar = project(":boss-ipc").tasks.named<Jar>("jar")
+        val bossNativeFilesJar = project(":boss-native-files").tasks.named<Jar>("jar")
         val mainRuntimeClasspath = sourceSets.main.get().runtimeClasspath
         val nativeRuntimeClasspath = nativeSecurityTestSourceSet.runtimeClasspath
         inputs.files(nativeSecurityTestSourceSet.runtimeClasspath)
         inputs.file(qemuLauncher)
-        dependsOn(nativeSecurityTestSourceSet.classesTaskName, bossIpcJar)
+        dependsOn(nativeSecurityTestSourceSet.classesTaskName, bossIpcJar, bossNativeFilesJar)
         from(sourceSets.main.get().output) {
             into("classes")
         }
@@ -98,16 +99,20 @@ val nativeSecurityTestBundle =
             into("classes")
         }
         from({
-            buildList {
-                addAll(mainRuntimeClasspath.files)
-                addAll(nativeRuntimeClasspath.files)
-            }.filter(File::isFile)
-                .filterNot { it.name.startsWith("boss-ipc-") }
-                .distinct()
+            val runtimeClasspathFiles = linkedSetOf<File>()
+            mainRuntimeClasspath.files.filterTo(runtimeClasspathFiles, File::isFile)
+            nativeRuntimeClasspath.files.filterTo(runtimeClasspathFiles, File::isFile)
+            runtimeClasspathFiles.removeIf {
+                it.name.startsWith("boss-ipc-") || it.name.startsWith("boss-native-files-")
+            }
+            runtimeClasspathFiles
         }) {
             into("lib")
         }
         from(bossIpcJar.flatMap { it.archiveFile }) {
+            into("lib")
+        }
+        from(bossNativeFilesJar.flatMap { it.archiveFile }) {
             into("lib")
         }
         from(qemuLauncher) {
