@@ -1,6 +1,7 @@
 package ai.rever.boss.components.plugin
 
 import ai.rever.boss.process.CageforgeLocalIpcEndpoint
+import java.io.File
 
 /**
  * Converts a BOSS IPC address into the endpoint kind supported by Cageforge policy.
@@ -12,7 +13,11 @@ import ai.rever.boss.process.CageforgeLocalIpcEndpoint
 internal fun parseProtectedLocalIpcEndpoint(address: String): CageforgeLocalIpcEndpoint =
     when {
         address.startsWith("unix://") -> {
-            CageforgeLocalIpcEndpoint.UnixSocket(address.removePrefix("unix://"))
+            val path = File(address.removePrefix("unix://"))
+            require(path.isAbsolute) {
+                "Protected Unix-socket IPC path must be absolute: ${path.path}"
+            }
+            CageforgeLocalIpcEndpoint.UnixSocket(path.canonicalFile.path)
         }
 
         address.startsWith("pipe://") -> {

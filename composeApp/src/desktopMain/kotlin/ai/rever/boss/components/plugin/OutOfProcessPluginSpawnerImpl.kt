@@ -75,17 +75,18 @@ class OutOfProcessPluginSpawnerImpl(
                         "Security-required plugin $pluginId must be launched through the protected spawner",
                     )
                 }
-                val config =
-                    buildProcessConfig(
-                        ProtectedPluginProcessConfig(
-                            manifest = manifest,
-                            jarPath = jarPath,
-                            securityRequired = effectiveSecurityRequired,
-                            runtimeClasspath = runtimeClasspath,
-                            windowId = windowId,
-                            projectPath = projectPath,
-                        ),
-                    )
+                val preparedLaunch =
+                    ProtectedPluginProcessConfig(
+                        manifest = manifest,
+                        jarPath = jarPath,
+                        securityRequired = effectiveSecurityRequired,
+                        runtimeClasspath = runtimeClasspath,
+                        windowId = windowId,
+                        projectPath = projectPath,
+                        sandboxRequest = readSandboxRequest(jarPath, effectiveSecurityRequired),
+                    ).prepare()
+                requestSandboxApproval(manifest, pluginId, preparedLaunch.sandboxRequest)
+                val config = preparedLaunch.processConfig
                 val spawnedProcess = spawnProcess(spawnGeneration, config)
                 managedProcess = spawnedProcess
                 val newSession = sessionRegistry.newSession(pluginId, config, spawnedProcess)

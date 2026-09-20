@@ -20,6 +20,7 @@ import ai.rever.boss.components.plugin.DependentRestartEventBus
 import ai.rever.boss.components.plugin.MissingHandlerPluginEventBus
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
+import ai.rever.boss.components.plugin.PluginSandboxApprovalRegistry
 import ai.rever.boss.components.plugin.claimMissingDependencyForWindow
 import ai.rever.boss.components.plugin.providers.createApplicationEventBus
 import ai.rever.boss.components.plugin.resolveRegisteredPanelId
@@ -79,6 +80,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ai.rever.boss.components.plugin.consumeApprovals as consumePluginSandboxApprovals
 
 /**
  * Pause before applying a tab selection received from another window. UX grace, not a
@@ -315,6 +317,14 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
     LaunchedEffect(Unit) {
         McpToolRegistryImpl.approvalBus.consumeApprovals { request ->
             state.pendingMcpApproval = request
+        }
+    }
+
+    // Protected plugin launches have a separate approval contract from MCP tool calls:
+    // approving an agent action must never approve an OS-level plugin capability.
+    LaunchedEffect(Unit) {
+        PluginSandboxApprovalRegistry.bus.consumePluginSandboxApprovals { request ->
+            state.pendingPluginSandboxApproval = request
         }
     }
 

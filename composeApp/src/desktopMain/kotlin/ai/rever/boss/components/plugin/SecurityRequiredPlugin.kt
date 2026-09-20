@@ -28,6 +28,9 @@ internal actual object SecurityRequiredPlugin {
                         require(security is JsonObject) { "Plugin security marker must be an object" }
                         readBoolean(security, "required")
                     }
+                require(objectRoot["sandbox"] == null || topLevel == true || nested == true) {
+                    "Plugin sandbox capabilities require securityRequired=true"
+                }
                 require(topLevel == null || nested == null || topLevel == nested) {
                     "Plugin security markers disagree"
                 }

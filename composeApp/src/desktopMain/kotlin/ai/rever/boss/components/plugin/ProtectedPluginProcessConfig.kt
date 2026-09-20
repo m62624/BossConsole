@@ -3,8 +3,7 @@ package ai.rever.boss.components.plugin
 import ai.rever.boss.ipc.IpcAddressResolver
 import ai.rever.boss.performance.PerformanceSettingsManager
 import ai.rever.boss.plugin.api.PluginManifest
-import ai.rever.boss.plugin.pathutils.BossDirectories
-import ai.rever.boss.process.CageforgePolicyCeiling
+import ai.rever.boss.process.CageforgeLocalIpcEndpoint
 import ai.rever.boss.process.ProcessConfig
 import ai.rever.boss.process.ProcessSpawner
 import ai.rever.boss.process.ProcessType
@@ -18,9 +17,30 @@ internal data class ProtectedPluginProcessConfig(
     val runtimeClasspath: String,
     val windowId: String,
     val projectPath: String,
+    val sandboxRequest: PluginSandboxRequest = PluginSandboxRequest.EMPTY,
 )
 
-internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessConfig {
+internal data class PreparedProtectedPluginLaunch(
+    val processConfig: ProcessConfig,
+    val sandboxRequest: PluginSandboxRequest,
+)
+
+private data class ProtectedLaunchContext(
+    val manifest: PluginManifest,
+    val pluginJar: File,
+    val classpath: String,
+    val nativeImage: String?,
+    val workDir: File,
+    val processId: String,
+    val protectedRoots: ProtectedRoots,
+    val localIpcEndpoints: List<CageforgeLocalIpcEndpoint>,
+    val validatedSandboxRequest: ValidatedPluginSandboxRequest,
+)
+
+internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessConfig = input.prepare().processConfig
+
+internal fun ProtectedPluginProcessConfig.prepare(): PreparedProtectedPluginLaunch {
+    val input = this
     val manifest = input.manifest
     val workDir = validateWorkDir(input.projectPath)
     val pluginJar = validatePluginJar(input.jarPath)
@@ -44,34 +64,66 @@ internal fun buildProcessConfig(input: ProtectedPluginProcessConfig): ProcessCon
         } else {
             emptyList()
         }
+    val validatedSandboxRequest =
+        validatePluginSandboxRequest(
+            request = input.sandboxRequest,
+            securityRequired = input.securityRequired,
+            workspace = workDir,
+            protectedRoots = protectedRoots,
+            hostEndpoints = localIpcEndpoints,
+        )
 
-    return ProcessConfig(
-        processId = processId,
-        processType = ProcessType.PLUGIN,
-        displayName = manifest.displayName,
-        mainClass = "ai.rever.boss.plugin.runtime.PluginProcessMainKt",
-        classpath = classpath,
-        nativeImagePath = nativeImage,
-        jvmArgs = buildJvmArgs(workDir, input.securityRequired),
-        workDir = workDir,
-        restartPolicy = RestartPolicy.ON_FAILURE,
-        maxRestarts = manifest.sandbox.maxRestartAttempts,
-        environment = buildEnvironment(pluginJar.path, workDir.path, input.windowId, manifest.pluginId),
-        startupTimeoutMs = manifest.healthContract?.startupTimeoutMs ?: 30_000,
-        heartbeatIntervalMs = manifest.healthContract?.heartbeatIntervalMs ?: 5_000,
-        cageforge =
-            if (input.securityRequired) {
-                CageforgePolicyCeiling
-                    .forWorkspace(
-                        workDir,
-                        protectedRoots.readOnlyRoots,
-                        runtimeExecutableRoots = protectedRoots.executableRoots,
-                    ).policyFor(workDir, localIpcEndpoints = localIpcEndpoints)
-            } else {
-                null
-            },
+    val context =
+        ProtectedLaunchContext(
+            manifest = manifest,
+            pluginJar = pluginJar,
+            classpath = classpath,
+            nativeImage = nativeImage,
+            workDir = workDir,
+            processId = processId,
+            protectedRoots = protectedRoots,
+            localIpcEndpoints = localIpcEndpoints,
+            validatedSandboxRequest = validatedSandboxRequest,
+        )
+    return PreparedProtectedPluginLaunch(
+        processConfig = buildProtectedProcessConfig(input, context),
+        sandboxRequest = context.validatedSandboxRequest.request,
     )
 }
+
+private fun buildProtectedProcessConfig(
+    input: ProtectedPluginProcessConfig,
+    context: ProtectedLaunchContext,
+): ProcessConfig =
+    ProcessConfig(
+        processId = context.processId,
+        processType = ProcessType.PLUGIN,
+        displayName = context.manifest.displayName,
+        mainClass = "ai.rever.boss.plugin.runtime.PluginProcessMainKt",
+        classpath = context.classpath,
+        nativeImagePath = context.nativeImage,
+        jvmArgs = buildJvmArgs(context.workDir, input.securityRequired),
+        workDir = context.workDir,
+        restartPolicy = RestartPolicy.ON_FAILURE,
+        maxRestarts = context.manifest.sandbox.maxRestartAttempts,
+        environment =
+            buildEnvironment(
+                context.pluginJar.path,
+                context.workDir.path,
+                input.windowId,
+                context.manifest.pluginId,
+            ),
+        startupTimeoutMs = context.manifest.healthContract?.startupTimeoutMs ?: 30_000,
+        heartbeatIntervalMs = context.manifest.healthContract?.heartbeatIntervalMs ?: 5_000,
+        cageforge =
+            buildCageforgePolicy(
+                input.securityRequired,
+                context.workDir,
+                context.protectedRoots,
+                context.localIpcEndpoints,
+                context.validatedSandboxRequest.requestedReadOnlyRoots,
+            ),
+    )
 
 private fun validateWorkDir(projectPath: String): File {
     val requested = File(projectPath.ifEmpty { System.getProperty("user.dir") })
@@ -142,7 +194,7 @@ private fun validateNativeImage(
     }
 }
 
-private data class ProtectedRoots(
+internal data class ProtectedRoots(
     val readOnlyRoots: List<File>,
     val executableRoots: List<File>,
 )
@@ -219,36 +271,3 @@ private fun buildJvmArgs(
             add("-Dboss.api.version=$it")
         }
     }
-
-private fun buildEnvironment(
-    jarPath: String,
-    workingDirectory: String,
-    windowId: String,
-    pluginId: String,
-): Map<String, String> =
-    buildMap {
-        put("BOSS_PLUGIN_CLASSPATH", jarPath)
-        put("BOSS_PLUGIN_ID", pluginId)
-        if (windowId.isNotBlank()) put("BOSS_WINDOW_ID", windowId)
-        put("BOSS_PROJECT_PATH", workingDirectory)
-    }
-
-internal fun resolveRuntimeClasspath(): String {
-    val configured = System.getenv("BOSS_PLUGIN_RUNTIME_JAR")
-    val discovered =
-        runCatching { BossDirectories.rootDir }
-            .getOrElse {
-                File(
-                    System.getenv("BOSS_DATA_DIR")
-                        ?: File(System.getProperty("user.home"), ".boss").path,
-                )
-            }.let { File(it, "plugins") }
-            .listFiles()
-            ?.filter {
-                it.name.startsWith(MicrokernelRuntime.ARTIFACT_PREFIX) && it.name.endsWith(".jar")
-            }?.maxByOrNull { it.lastModified() }
-            ?.canonicalPath
-    return configured
-        ?: discovered
-        ?: error("Cannot find ${MicrokernelRuntime.ARTIFACT_PREFIX} JAR. Set BOSS_PLUGIN_RUNTIME_JAR env var.")
-}

@@ -210,6 +210,7 @@ class CageforgePolicyCeiling private constructor(
         workspace: File,
         localIpcPaths: Iterable<String> = emptyList(),
         localIpcEndpoints: Iterable<CageforgeLocalIpcEndpoint> = emptyList(),
+        additionalReadOnlyRoots: Iterable<File> = emptyList(),
     ): CageforgeProcessPolicy {
         require(workspace.isAbsolute) { "Cageforge requested workspace must be absolute" }
         val requestedRoot = workspace.canonicalFile
@@ -219,9 +220,23 @@ class CageforgePolicyCeiling private constructor(
         require(requestedRoot.toPath().startsWith(allowedWorkspaceRoot.toPath())) {
             "Cageforge requested workspace is outside the host policy ceiling"
         }
+        val requestedReadOnlyRoots =
+            additionalReadOnlyRoots.map { root ->
+                require(root.isAbsolute) { "Cageforge requested read-only root must be absolute" }
+                val canonical = root.canonicalFile
+                require(canonical.exists()) {
+                    "Cageforge requested read-only root does not exist: ${canonical.path}"
+                }
+                val withinWorkspace = canonical.toPath().startsWith(allowedWorkspaceRoot.toPath())
+                val withinHostRoot = readOnlyRoots.any { canonical.toPath().startsWith(it.toPath()) }
+                require(withinWorkspace || withinHostRoot) {
+                    "Cageforge requested read-only root is outside the host policy ceiling: ${canonical.path}"
+                }
+                canonical
+            }
         return CageforgeProcessPolicy.workspace(
             requestedRoot,
-            readOnlyRoots,
+            readOnlyRoots + requestedReadOnlyRoots,
             localIpcPaths,
             localIpcEndpoints,
             runtimeExecutableRoots = this.runtimeExecutableRoots,
