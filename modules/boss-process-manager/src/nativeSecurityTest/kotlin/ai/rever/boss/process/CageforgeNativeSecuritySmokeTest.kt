@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
 
 /** Representative BOSS-side native smoke; the complete backend suite remains in Cageforge CI. */
+@Timeout(value = 90)
 class CageforgeNativeSecuritySmokeTest {
     @Test
     fun nativeProcessRegistersThroughAuthenticatedLocalIpc() {

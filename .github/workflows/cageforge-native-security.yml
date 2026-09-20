@@ -233,6 +233,7 @@ jobs:
           otool -L "$real_java"
 
       - name: Run native security smoke
+        timeout-minutes: 8
         run: |
           ./gradlew \
             :boss-process-manager:nativeSecurityTest \
@@ -302,6 +303,7 @@ jobs:
             --stacktrace
 
       - name: Run native security smoke
+        timeout-minutes: 8
         run: |
           ./gradlew \
             :boss-process-manager:nativeSecurityTest \
