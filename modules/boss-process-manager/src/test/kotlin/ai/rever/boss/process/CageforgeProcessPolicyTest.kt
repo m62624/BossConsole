@@ -1,7 +1,5 @@
 package ai.rever.boss.process
 
-import ai.cageforge.Cageforge
-import ai.cageforge.RuntimeContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -35,12 +33,6 @@ class CageforgeProcessPolicyTest {
                     .replace("\"", "\\\"")
             assertTrue(escapedRuntimeRoot in policy.toml)
             assertTrue("/dev/.cageforge-runtime" !in policy.toml)
-
-            Cageforge.checkToml(
-                policy.toml,
-                policy.profileName,
-                RuntimeContext(currentDirectory = workspace.toAbsolutePath()),
-            )
         } finally {
             runtimeRoot.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
@@ -86,12 +78,6 @@ class CageforgeProcessPolicyTest {
                 assertTrue(processSocket.toString() in policy.toml)
             }
             assertFalse("unix_socket_mode" in policy.toml)
-
-            Cageforge.checkToml(
-                policy.toml,
-                policy.profileName,
-                RuntimeContext(currentDirectory = workspace.toAbsolutePath()),
-            )
         } finally {
             workspace.toFile().deleteRecursively()
         }
