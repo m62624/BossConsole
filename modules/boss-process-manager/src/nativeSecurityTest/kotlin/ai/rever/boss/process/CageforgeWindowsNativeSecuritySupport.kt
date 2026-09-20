@@ -64,7 +64,7 @@ internal object CageforgeWindowsNativeSecuritySupport {
         servers: WindowsLocalIpcServers,
         result: Path,
     ): ProcessConfig {
-        val classpath = System.getProperty("java.class.path")
+        val classpath = nativeSecurityClasspath()
         val javaExecutable = ProcessSpawner.findJavaExecutable()
         val readRoots =
             classpathRootsForWindows(classpath) +

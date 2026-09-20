@@ -136,7 +136,7 @@ class CageforgeNativeSecuritySmokeTest {
         val outside = nativeSecurityTempDirectory("boss-cageforge-outside-").resolve("must-not-exist.txt")
         val server = ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())
         try {
-            val classpath = System.getProperty("java.class.path")
+            val classpath = nativeSecurityClasspath()
             val config = createConfig(workspace, outside, server, classpath)
             var managed: ManagedProcess? = null
             try {
@@ -161,7 +161,7 @@ class CageforgeNativeSecuritySmokeTest {
         val lateMarker = workspace.resolve("late-descendant-write.txt")
         var managed: ManagedProcess? = null
         try {
-            val classpath = System.getProperty("java.class.path")
+            val classpath = nativeSecurityClasspath()
             val javaExecutable = ProcessSpawner.findJavaExecutable()
             val readRoots =
                 classpathRoots(classpath) +
@@ -380,7 +380,7 @@ private fun authenticatedIpcConfig(
     kernelAddress: String,
     processAddress: String,
 ): ProcessConfig {
-    val classpath = System.getProperty("java.class.path")
+    val classpath = nativeSecurityClasspath()
     val javaExecutable = ProcessSpawner.findJavaExecutable()
     val readRoots =
         classpath
@@ -444,7 +444,7 @@ private fun createLocalIpcConfig(
     blockedSocket: Path,
     result: Path,
 ): ProcessConfig {
-    val classpath = System.getProperty("java.class.path")
+    val classpath = nativeSecurityClasspath()
     val javaExecutable = ProcessSpawner.findJavaExecutable()
     val readRoots =
         classpath

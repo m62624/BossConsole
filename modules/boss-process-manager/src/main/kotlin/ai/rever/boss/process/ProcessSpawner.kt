@@ -247,7 +247,8 @@ class ProcessSpawner
                 "Protected bootstrap requires an absolute executable Java runtime: ${java.path}"
             }
             val classpath =
-                System.getProperty("java.class.path")?.takeIf { it.isNotBlank() }
+                (System.getProperty("boss.test.classpath") ?: System.getProperty("java.class.path"))
+                    ?.takeIf { it.isNotBlank() }
                     ?: error("Protected launch requires the current JVM classpath")
             return buildList {
                 add(java.path)

@@ -162,6 +162,20 @@ tasks.withType<Test>().configureEach {
                 Path.of(System.getProperty("java.io.tmpdir"))
             }
         systemProperty("boss.data.dir", Files.createTempDirectory(temporaryRoot, "bs").toString())
-        systemProperty("boss.test.classpath", classpath.asPath)
+        val stagedClasspath =
+            System.getenv("CAGEFORGE_NATIVE_SECURITY_CLASSPATH").takeIf { !it.isNullOrBlank() }
+        val existingClasspath =
+            classpath.asPath
+                .split(File.pathSeparator)
+                .filter { File(it).exists() }
+                .joinToString(File.pathSeparator)
+        systemProperty(
+            "boss.test.classpath",
+            if (name == "nativeSecurityTest") {
+                stagedClasspath ?: existingClasspath
+            } else {
+                classpath.asPath
+            },
+        )
     }
 }
