@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.bundling.Compression
 import org.gradle.api.tasks.bundling.Tar
 import org.gradle.api.tasks.testing.Test
@@ -118,6 +119,25 @@ val nativeSecurityTestBundle =
         from(qemuLauncher) {
             into("ci/cageforge-qemu-suite")
         }
+    }
+
+val windowsNativeSecuritySetup =
+    tasks.register<JavaExec>("windowsNativeSecuritySetup") {
+        group = "verification"
+        description = "Explicitly provisions Cageforge prerequisites for the Windows security lane"
+        dependsOn(nativeSecurityTestSourceSet.classesTaskName)
+        mainClass.set("ai.rever.boss.process.CageforgeWindowsSetupMainKt")
+        classpath = nativeSecurityTestSourceSet.runtimeClasspath
+    }
+
+val windowsNativeSecurityTeardown =
+    tasks.register<JavaExec>("windowsNativeSecurityTeardown") {
+        group = "verification"
+        description = "Removes Cageforge prerequisites provisioned by the Windows security lane"
+        dependsOn(nativeSecurityTestSourceSet.classesTaskName)
+        mainClass.set("ai.rever.boss.process.CageforgeWindowsSetupMainKt")
+        classpath = nativeSecurityTestSourceSet.runtimeClasspath
+        args("teardown")
     }
 
 tasks.withType<Test>().configureEach {
