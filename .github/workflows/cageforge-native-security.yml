@@ -284,9 +284,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # The first protected launch may invoke Cageforge WindowsSetup and its
-      # owner-scoped UAC provisioning. Subsequent launches reuse the verified
-      # setup; any provisioning failure fails this native lane.
+      # The protected BOSS launch path verifies Cageforge's persistent,
+      # owner-scoped Windows setup but never invokes UAC implicitly. This lane
+      # therefore requires a runner that has already completed the explicit
+      # Cageforge setup operation; missing or stale setup is a hard failure.
       # The BOSS IPC resolver uses the same Windows named-pipe transport as the
       # protected policy. The smoke must therefore prove both allowed and denied
       # named-pipe access after the explicit Cageforge setup is ready.
