@@ -235,6 +235,23 @@ private class NamedPipeConnection private constructor(
     val isClosed: Boolean
         get() = closed.get()
 
+    private fun availableBytes(): Int =
+        if (isClosed) {
+            0
+        } else {
+            val available = IntByReference()
+            if (Kernel32.INSTANCE.PeekNamedPipe(handle, null, 0, null, available, null)) {
+                available.value
+            } else {
+                val error = Kernel32.INSTANCE.GetLastError()
+                if (error == WinError.ERROR_BROKEN_PIPE || error == WinError.ERROR_NO_DATA) {
+                    0
+                } else {
+                    throw win32Failure("PeekNamedPipe")
+                }
+            }
+        }
+
     fun accept() {
         val connected = Kernel32.INSTANCE.ConnectNamedPipe(handle, null)
         if (!connected && Kernel32.INSTANCE.GetLastError() != WinError.ERROR_PIPE_CONNECTED) {
@@ -244,6 +261,8 @@ private class NamedPipeConnection private constructor(
 
     fun inputStream(): InputStream =
         object : InputStream() {
+            override fun available(): Int = availableBytes()
+
             override fun read(): Int {
                 val byte = ByteArray(1)
                 return if (read(byte, 0, 1) == -1) -1 else byte[0].toInt() and 0xff
