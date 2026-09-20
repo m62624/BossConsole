@@ -40,6 +40,29 @@ class CageforgeProcessPolicyTest {
     }
 
     @Test
+    fun `workspace preset collapses nested host roots before policy lowering`() {
+        val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
+        val runtimeRoot = Files.createTempDirectory("cageforge-policy-runtime-")
+        val nestedRoot = Files.createDirectories(runtimeRoot.resolve("nested"))
+        try {
+            val policy =
+                CageforgeProcessPolicy.workspace(
+                    workspace.toFile(),
+                    readOnlyRoots = listOf(nestedRoot.toFile(), runtimeRoot.toFile()),
+                    runtimeExecutableRoots = listOf(nestedRoot.toFile(), runtimeRoot.toFile()),
+                )
+            val rootPath = runtimeRoot.toFile().canonicalPath
+            val nestedPath = nestedRoot.toFile().canonicalPath
+
+            assertTrue(rootPath in policy.toml)
+            assertFalse(nestedPath in policy.toml)
+        } finally {
+            runtimeRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `workspace preset maps host runtime roots for macOS executable access`() {
         val workspace = Files.createTempDirectory("cageforge-policy-workspace-")
         val runtimeRoot = Files.createTempDirectory("cageforge-policy-runtime-")

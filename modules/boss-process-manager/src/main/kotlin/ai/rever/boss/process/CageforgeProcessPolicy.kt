@@ -46,28 +46,8 @@ data class CageforgeProcessPolicy(
             val root = workspace.canonicalFile
             require(root.isDirectory) { "Cageforge workspace must be an existing directory" }
 
-            val additionalRoots =
-                readOnlyRoots
-                    .map {
-                        require(it.isAbsolute) { "Cageforge read-only root must be absolute" }
-                        it.canonicalFile
-                    }.onEach {
-                        require(it.exists()) { "Cageforge read-only root does not exist: ${it.path}" }
-                    }.filterNot { it == root }
-                    .distinctBy { it.path }
-
-            val executableRoots =
-                runtimeExecutableRoots
-                    .map {
-                        require(it.isAbsolute) {
-                            "Cageforge runtime executable root must be absolute: ${it.path}"
-                        }
-                        it.canonicalFile
-                    }.onEach {
-                        require(it.isDirectory) {
-                            "Cageforge runtime executable root does not exist: ${it.path}"
-                        }
-                    }.distinctBy { it.path }
+            val additionalRoots = validatedReadOnlyRoots(root, readOnlyRoots)
+            val executableRoots = validatedExecutableRoots(runtimeExecutableRoots)
 
             val endpoints =
                 localIpcPaths
@@ -113,6 +93,45 @@ data class CageforgeProcessPolicy(
             require(path.isAbsolute) { "Cageforge Unix-socket path must be absolute: ${path.path}" }
             return path.canonicalFile.path
         }
+
+        private fun collapseNestedRoots(roots: List<File>): List<File> {
+            val orderedRoots = roots.sortedWith(compareBy<File>({ it.toPath().nameCount }, { it.path }))
+            return orderedRoots.filter { candidate ->
+                orderedRoots.none { parent ->
+                    parent != candidate && candidate.toPath().startsWith(parent.toPath())
+                }
+            }
+        }
+
+        private fun validatedReadOnlyRoots(
+            workspace: File,
+            roots: Iterable<File>,
+        ): List<File> =
+            collapseNestedRoots(
+                roots
+                    .map {
+                        require(it.isAbsolute) { "Cageforge read-only root must be absolute" }
+                        it.canonicalFile
+                    }.onEach {
+                        require(it.exists()) { "Cageforge read-only root does not exist: ${it.path}" }
+                    }.filterNot { it == workspace }
+                    .distinctBy { it.path },
+            )
+
+        private fun validatedExecutableRoots(roots: Iterable<File>): List<File> =
+            collapseNestedRoots(
+                roots
+                    .map {
+                        require(it.isAbsolute) {
+                            "Cageforge runtime executable root must be absolute: ${it.path}"
+                        }
+                        it.canonicalFile
+                    }.onEach {
+                        require(it.isDirectory) {
+                            "Cageforge runtime executable root does not exist: ${it.path}"
+                        }
+                    }.distinctBy { it.path },
+            )
 
         private fun validatedWindowsNamedPipe(endpoint: CageforgeLocalIpcEndpoint.WindowsNamedPipe): String {
             val value = endpoint.value
