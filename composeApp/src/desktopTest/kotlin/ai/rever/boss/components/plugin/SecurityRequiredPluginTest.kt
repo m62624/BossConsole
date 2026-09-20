@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.plugin.launchpad.DevPluginArtifacts
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import java.util.jar.JarEntry
@@ -54,6 +55,17 @@ class SecurityRequiredPluginTest {
     @Test
     fun `malformed marker fails closed`() {
         val jar = writeJar("{\"securityRequired\":\"true\"}")
+
+        val result = SecurityRequiredPlugin.readRequirement(jar.toString())
+
+        assertTrue(result.isFailure)
+        assertFalse(result.isSuccess)
+    }
+
+    @Test
+    fun `oversized manifest fails closed before security marker parsing`() {
+        val padding = "x".repeat(DevPluginArtifacts.MAX_MANIFEST_BYTES)
+        val jar = writeJar("{\"securityRequired\":true,\"padding\":\"$padding\"}")
 
         val result = SecurityRequiredPlugin.readRequirement(jar.toString())
 

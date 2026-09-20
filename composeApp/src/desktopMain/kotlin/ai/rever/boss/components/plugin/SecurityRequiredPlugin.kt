@@ -1,5 +1,6 @@
 package ai.rever.boss.components.plugin
 
+import ai.rever.boss.plugin.launchpad.DevPluginArtifacts
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -19,8 +20,13 @@ internal actual object SecurityRequiredPlugin {
                 val entry =
                     jar.getJarEntry("META-INF/boss-plugin/plugin.json")
                         ?: return@use SecurityRequirement.OPTIONAL
-                val root =
-                    jar.getInputStream(entry).bufferedReader().use { json.parseToJsonElement(it.readText()) }
+                val manifest =
+                    jar.getInputStream(entry).use { stream ->
+                        requireNotNull(DevPluginArtifacts.readBoundedUtf8String(stream)) {
+                            "Plugin manifest exceeds ${DevPluginArtifacts.MAX_MANIFEST_BYTES} bytes or cannot be read"
+                        }
+                    }
+                val root = json.parseToJsonElement(manifest)
                 val objectRoot = root.jsonObject
                 val topLevel = readBoolean(objectRoot, "securityRequired")
                 val nested =
