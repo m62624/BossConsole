@@ -303,6 +303,33 @@ jobs:
             --console=plain \
             --stacktrace
 
+      # Cageforge applies launch-scoped ACLs to every file in the protected
+      # classpath. The Gradle test classpath contains shared-cache jars whose
+      # inherited ACLs are intentionally not launch-scoped, so run the smoke
+      # from the same self-contained runtime bundle used by the Linux guest.
+      - name: Stage Windows native security runtime
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          ./gradlew \
+            :boss-process-manager:nativeSecurityTestBundle \
+            --no-daemon \
+            --max-workers=2 \
+            --console=plain
+          stage="$RUNNER_TEMP/boss-native-security-runtime"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          tar -xzf \
+            modules/boss-process-manager/build/nativeSecurityTest/boss-native-security-test-bundle.tar.gz \
+            -C "$stage"
+          classpath="$stage/classes"
+          while IFS= read -r jar; do
+            classpath="$classpath;$jar"
+          done < <(find "$stage/lib" -type f -name '*.jar' | sort)
+          test -d "$stage/classes"
+          test -n "$classpath"
+          echo "CAGEFORGE_NATIVE_SECURITY_CLASSPATH=$classpath" >> "$GITHUB_ENV"
+
       - name: Run native security smoke
         timeout-minutes: 8
         run: |
