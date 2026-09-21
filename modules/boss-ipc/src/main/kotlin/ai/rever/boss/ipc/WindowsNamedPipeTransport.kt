@@ -1,5 +1,7 @@
 package ai.rever.boss.ipc
 
+import com.sun.jna.Library
+import com.sun.jna.Native
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.WinBase
 import com.sun.jna.platform.win32.WinError
@@ -73,6 +75,16 @@ private const val NAMED_PIPE_CLIENT_BIND_ERROR = "A named-pipe client cannot bin
 private const val NAMED_PIPE_SERVER_CONNECT_ERROR = "A named-pipe server cannot connect"
 
 private const val NAMED_PIPE_SERVER_WRITE_ERROR = "A named-pipe server cannot write"
+
+/** JNA declaration whose method name must match the exported Win32 symbol exactly. */
+@Suppress("FunctionName")
+private interface WindowsKernel32Cancellation : Library {
+    fun CancelSynchronousIo(thread: WinNT.HANDLE?): Boolean
+}
+
+private val windowsKernel32Cancellation: WindowsKernel32Cancellation by lazy {
+    Native.load("kernel32", WindowsKernel32Cancellation::class.java)
+}
 
 private fun rejectClientBind(): Nothing = throw UnsupportedOperationException(NAMED_PIPE_CLIENT_BIND_ERROR)
 
@@ -161,6 +173,8 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
 
     @Volatile private var pendingConnection: NamedPipeConnection? = null
 
+    @Volatile private var acceptThreadHandle: WinNT.HANDLE? = null
+
     @Volatile private var open = true
 
     override fun config(): ChannelConfig = config
@@ -185,9 +199,21 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
         val boundAddress = address ?: return
         if (!open || !acceptPending.compareAndSet(false, true)) return
         acceptExecutor.execute {
+            val threadHandle =
+                Kernel32.INSTANCE.OpenThread(
+                    WinNT.THREAD_TERMINATE,
+                    false,
+                    Kernel32.INSTANCE.GetCurrentThreadId(),
+                )
+            acceptThreadHandle = threadHandle
             try {
+                if (!open) return@execute
                 val connection = NamedPipeConnection.createServer(boundAddress.name)
                 pendingConnection = connection
+                if (!open) {
+                    connection.close()
+                    return@execute
+                }
                 connection.accept()
                 eventLoop().execute {
                     pendingConnection = null
@@ -204,6 +230,9 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
                 reportAcceptFailure(error)
             } catch (error: IllegalArgumentException) {
                 reportAcceptFailure(error)
+            } finally {
+                acceptThreadHandle = null
+                threadHandle?.let(Kernel32.INSTANCE::CloseHandle)
             }
         }
     }
@@ -221,6 +250,7 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
 
     override fun doClose() {
         open = false
+        acceptThreadHandle?.let { windowsKernel32Cancellation.CancelSynchronousIo(it) }
         pendingConnection?.close()
         pendingConnection = null
         acceptExecutor.shutdownNow()
