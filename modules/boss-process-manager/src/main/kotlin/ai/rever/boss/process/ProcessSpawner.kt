@@ -48,6 +48,35 @@ private fun terminateFailedCageforgeProcess(
     runCatching { child.close() }.onFailure(failure::addSuppressed)
 }
 
+private fun createCageforgeRuntime(
+    policy: CageforgeProcessPolicy,
+    workDir: File,
+    closePreparedIpc: () -> Unit,
+): Cageforge {
+    val runtimeContext = RuntimeContext(currentDirectory = workDir.toPath())
+    return runCatching {
+        Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
+        Cageforge.fromToml(
+            policy.toml,
+            policy.profileName,
+            runtimeContext,
+        )
+    }.getOrElse { error ->
+        closePreparedIpc()
+        throw error
+    }
+}
+
+private fun closePreparedIpcAfterRuntime(
+    runtime: Cageforge,
+    closePreparedIpc: () -> Unit,
+) {
+    runCatching { closePreparedIpc() }.getOrElse { error ->
+        runtime.close()
+        throw error
+    }
+}
+
 /**
  * Spawns child processes (either GraalVM native images or JVM subprocesses).
  *
@@ -207,19 +236,8 @@ class ProcessSpawner
                     preparedIpcEndpoints.asReversed().forEach(AutoCloseable::close)
                 }
             }
-            val runtimeContext = RuntimeContext(currentDirectory = workDir.toPath())
-            val runtime =
-                runCatching {
-                    Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
-                    Cageforge.fromToml(
-                        policy.toml,
-                        policy.profileName,
-                        runtimeContext,
-                    )
-                }.getOrElse { error ->
-                    closePreparedIpc()
-                    throw error
-                }
+            val runtime = createCageforgeRuntime(policy, workDir, closePreparedIpc)
+            closePreparedIpcAfterRuntime(runtime, closePreparedIpc)
             var child: CageforgeProcess? = null
             val runtimeClosed = AtomicBoolean(false)
             val closeRuntime = {
