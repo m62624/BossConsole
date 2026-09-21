@@ -115,6 +115,8 @@ private const val NAMED_PIPE_SERVER_CONNECT_ERROR = "A named-pipe server cannot 
 
 private const val NAMED_PIPE_SERVER_WRITE_ERROR = "A named-pipe server cannot write"
 
+private const val NAMED_PIPE_ACCEPT_POLL_MS = 10L
+
 /** JNA declaration whose method name must match the exported Win32 symbol exactly. */
 @Suppress("FunctionName")
 private interface WindowsKernel32Cancellation : Library {
@@ -262,10 +264,6 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
                     connection.close()
                     return@execute
                 }
-                // Cageforge reads the named-pipe ACL through a client handle. The pipe must already
-                // be listening before that handle can be opened; creating the server instance alone
-                // is not a sufficient readiness signal on Windows.
-                WindowsNamedPipeTransport.markServerReady(boundAddress.name)
                 connection.accept()
                 eventLoop().execute {
                     pendingConnection = null
@@ -316,6 +314,7 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
 }
 
 private class NamedPipeConnection private constructor(
+    private val name: String,
     private val handle: WinNT.HANDLE,
 ) {
     private val closed = AtomicBoolean(false)
@@ -341,9 +340,41 @@ private class NamedPipeConnection private constructor(
         }
 
     fun accept() {
-        val connected = Kernel32.INSTANCE.ConnectNamedPipe(handle, null)
-        if (!connected && Kernel32.INSTANCE.GetLastError() != WinError.ERROR_PIPE_CONNECTED) {
-            throw win32Failure("ConnectNamedPipe")
+        while (!isClosed) {
+            if (Kernel32.INSTANCE.ConnectNamedPipe(handle, null)) {
+                switchToBlockingMode()
+                return
+            }
+            when (Kernel32.INSTANCE.GetLastError()) {
+                WinError.ERROR_PIPE_CONNECTED,
+                -> {
+                    switchToBlockingMode()
+                    return
+                }
+
+                WinError.ERROR_NO_DATA -> {
+                    return
+                }
+
+                WinError.ERROR_PIPE_LISTENING -> {
+                    // Cageforge opens a client handle to inspect and lease the ACL. A nonblocking
+                    // named pipe is already in the listening state at this point, so that handoff
+                    // does not race the server's first ConnectNamedPipe call.
+                    WindowsNamedPipeTransport.markServerReady(name)
+                    Thread.sleep(NAMED_PIPE_ACCEPT_POLL_MS)
+                }
+
+                else -> {
+                    throw win32Failure("ConnectNamedPipe")
+                }
+            }
+        }
+    }
+
+    private fun switchToBlockingMode() {
+        val mode = IntByReference(WinBase.PIPE_WAIT)
+        check(Kernel32.INSTANCE.SetNamedPipeHandleState(handle, mode, null, null)) {
+            win32Failure("SetNamedPipeHandleState")
         }
     }
 
@@ -438,7 +469,7 @@ private class NamedPipeConnection private constructor(
                 Kernel32.INSTANCE.CreateNamedPipe(
                     name,
                     WinBase.PIPE_ACCESS_DUPLEX,
-                    WinBase.PIPE_TYPE_BYTE or WinBase.PIPE_READMODE_BYTE or WinBase.PIPE_WAIT or
+                    WinBase.PIPE_TYPE_BYTE or WinBase.PIPE_READMODE_BYTE or WinBase.PIPE_NOWAIT or
                         WinBase.PIPE_REJECT_REMOTE_CLIENTS,
                     WinBase.PIPE_UNLIMITED_INSTANCES,
                     64 * 1024,
@@ -447,7 +478,7 @@ private class NamedPipeConnection private constructor(
                     null,
                 )
             requireValid(handle, "CreateNamedPipe")
-            return NamedPipeConnection(handle)
+            return NamedPipeConnection(name, handle)
         }
 
         fun openClient(name: String): NamedPipeConnection {
@@ -463,7 +494,7 @@ private class NamedPipeConnection private constructor(
                     null,
                 )
             requireValid(handle, "CreateFile")
-            return NamedPipeConnection(handle)
+            return NamedPipeConnection(name, handle)
         }
 
         private fun requireValid(
