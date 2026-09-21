@@ -67,16 +67,6 @@ private fun createCageforgeRuntime(
     }
 }
 
-private fun closePreparedIpcAfterRuntime(
-    runtime: Cageforge,
-    closePreparedIpc: () -> Unit,
-) {
-    runCatching { closePreparedIpc() }.getOrElse { error ->
-        runtime.close()
-        throw error
-    }
-}
-
 /**
  * Spawns child processes (either GraalVM native images or JVM subprocesses).
  *
@@ -237,7 +227,6 @@ class ProcessSpawner
                 }
             }
             val runtime = createCageforgeRuntime(policy, workDir, closePreparedIpc)
-            closePreparedIpcAfterRuntime(runtime, closePreparedIpc)
             var child: CageforgeProcess? = null
             val runtimeClosed = AtomicBoolean(false)
             val closeRuntime = {
@@ -254,6 +243,7 @@ class ProcessSpawner
                 val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
                 child = process
                 process.onExit().whenComplete { _, _ -> runCatching { closeNativeResources() } }
+                closePreparedIpc()
                 ProtectedEnvironmentChannel.send(
                     process.inputStream,
                     process.outputStream,
