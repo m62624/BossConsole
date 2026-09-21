@@ -67,6 +67,11 @@ internal object WindowsNamedPipeTransport {
         serverReadiness.computeIfAbsent(address.name) { CompletableFuture() }
     }
 
+    fun prepareForProtectedLaunch(address: WindowsNamedPipeAddress): AutoCloseable =
+        NamedPipeConnection.createServer(address.name).let { connection ->
+            AutoCloseable { connection.close() }
+        }
+
     fun awaitServerReady(address: WindowsNamedPipeAddress) {
         try {
             serverReadiness

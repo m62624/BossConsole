@@ -265,6 +265,20 @@ object IpcAddressResolver {
     }
 
     /**
+     * Materialize a protected named-pipe endpoint before Cageforge preflight.
+     *
+     * Cageforge verifies and leases the DACL of an existing Windows pipe. The
+     * returned handle remains open until the native launch has been cleaned up;
+     * the child server creates its own instance of the same named pipe.
+     */
+    fun prepareForProtectedLaunch(address: String): AutoCloseable {
+        if (!isWindows || !address.startsWith("pipe://")) return AutoCloseable {}
+        return WindowsNamedPipeTransport.prepareForProtectedLaunch(
+            WindowsNamedPipeAddress(address.removePrefix("pipe://")),
+        )
+    }
+
+    /**
      * Set owner-only (0700) permissions on a Unix domain socket file after the server starts.
      * Prevents other local users from connecting to the IPC socket.
      */

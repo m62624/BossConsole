@@ -196,33 +196,55 @@ class ProcessSpawner
             val workDir = validateProtectedWorkDir(config)
             validateProtectedExecutable(command)
             CageforgePlatformSetup.ensureReady()
+            val preparedIpcEndpoints =
+                policy.localIpcEndpoints.map { endpoint ->
+                    IpcAddressResolver.prepareForProtectedLaunch(endpoint.value)
+                }
+            val preparedIpcClosed = AtomicBoolean(false)
+            val closePreparedIpc = {
+                if (preparedIpcClosed.compareAndSet(false, true)) {
+                    preparedIpcEndpoints.asReversed().forEach(AutoCloseable::close)
+                }
+            }
             val runtimeContext = RuntimeContext(currentDirectory = workDir.toPath())
-            Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
             val runtime =
-                Cageforge.fromToml(
-                    policy.toml,
-                    policy.profileName,
-                    runtimeContext,
-                )
+                try {
+                    Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
+                    Cageforge.fromToml(
+                        policy.toml,
+                        policy.profileName,
+                        runtimeContext,
+                    )
+                } catch (error: Throwable) {
+                    closePreparedIpc()
+                    throw error
+                }
             var child: CageforgeProcess? = null
             val runtimeClosed = AtomicBoolean(false)
             val closeRuntime = {
                 if (runtimeClosed.compareAndSet(false, true)) runtime.close()
             }
+            val closeNativeResources = {
+                runCatching { closeRuntime() }.onFailure { error ->
+                    closePreparedIpc()
+                    throw error
+                }
+                closePreparedIpc()
+            }
             return runCatching {
                 val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
                 child = process
-                process.onExit().whenComplete { _, _ -> runCatching { closeRuntime() } }
+                process.onExit().whenComplete { _, _ -> runCatching { closeNativeResources() } }
                 ProtectedEnvironmentChannel.send(
                     process.inputStream,
                     process.outputStream,
                     environment,
                     config.startupTimeoutMs,
                 )
-                StartedProcess(process, closeRuntime)
+                StartedProcess(process, closeNativeResources)
             }.onFailure { error ->
                 child?.let { terminateFailedCageforgeProcess(it, error) }
-                closeRuntime()
+                closeNativeResources()
             }.getOrThrow()
         }
 
