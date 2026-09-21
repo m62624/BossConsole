@@ -7,6 +7,7 @@ import ai.rever.boss.ipc.IpcAddressResolver
 import ai.rever.boss.ipc.auth.IpcEnvironment
 import ai.rever.boss.ipc.auth.IpcTlsIdentity
 import ai.rever.boss.ipc.auth.ProcessTokenRegistry
+import ai.rever.boss.ipc.prepareProtectedIpcEndpoint
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -198,7 +199,7 @@ class ProcessSpawner
             CageforgePlatformSetup.ensureReady()
             val preparedIpcEndpoints =
                 policy.localIpcEndpoints.map { endpoint ->
-                    IpcAddressResolver.prepareForProtectedLaunch(endpoint.value)
+                    prepareProtectedIpcEndpoint(endpoint.value)
                 }
             val preparedIpcClosed = AtomicBoolean(false)
             val closePreparedIpc = {
@@ -208,14 +209,14 @@ class ProcessSpawner
             }
             val runtimeContext = RuntimeContext(currentDirectory = workDir.toPath())
             val runtime =
-                try {
+                runCatching {
                     Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
                     Cageforge.fromToml(
                         policy.toml,
                         policy.profileName,
                         runtimeContext,
                     )
-                } catch (error: Throwable) {
+                }.getOrElse { error ->
                     closePreparedIpc()
                     throw error
                 }

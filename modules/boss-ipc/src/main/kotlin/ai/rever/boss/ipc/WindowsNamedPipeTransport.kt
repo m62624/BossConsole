@@ -345,33 +345,36 @@ private class NamedPipeConnection private constructor(
         }
 
     fun accept() {
-        while (!isClosed) {
-            if (Kernel32.INSTANCE.ConnectNamedPipe(handle, null)) {
+        while (!isClosed && !tryAccept()) {
+            Thread.sleep(NAMED_PIPE_ACCEPT_POLL_MS)
+        }
+    }
+
+    private fun tryAccept(): Boolean {
+        if (Kernel32.INSTANCE.ConnectNamedPipe(handle, null)) {
+            switchToBlockingMode()
+            return true
+        }
+        return when (Kernel32.INSTANCE.GetLastError()) {
+            WinError.ERROR_PIPE_CONNECTED -> {
                 switchToBlockingMode()
-                return
+                true
             }
-            when (Kernel32.INSTANCE.GetLastError()) {
-                WinError.ERROR_PIPE_CONNECTED,
-                -> {
-                    switchToBlockingMode()
-                    return
-                }
 
-                WinError.ERROR_NO_DATA -> {
-                    return
-                }
+            WinError.ERROR_NO_DATA -> {
+                true
+            }
 
-                WinError.ERROR_PIPE_LISTENING -> {
-                    // Cageforge opens a client handle to inspect and lease the ACL. A nonblocking
-                    // named pipe is already in the listening state at this point, so that handoff
-                    // does not race the server's first ConnectNamedPipe call.
-                    WindowsNamedPipeTransport.markServerReady(name)
-                    Thread.sleep(NAMED_PIPE_ACCEPT_POLL_MS)
-                }
+            WinError.ERROR_PIPE_LISTENING -> {
+                // Cageforge opens a client handle to inspect and lease the ACL. A nonblocking
+                // named pipe is already in the listening state at this point, so that handoff
+                // does not race the server's first ConnectNamedPipe call.
+                WindowsNamedPipeTransport.markServerReady(name)
+                false
+            }
 
-                else -> {
-                    throw win32Failure("ConnectNamedPipe")
-                }
+            else -> {
+                throw win32Failure("ConnectNamedPipe")
             }
         }
     }
