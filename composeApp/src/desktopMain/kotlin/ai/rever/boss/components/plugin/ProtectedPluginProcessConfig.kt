@@ -57,10 +57,13 @@ internal fun ProtectedPluginProcessConfig.prepare(): PreparedProtectedPluginLaun
     val processId = pluginProcessId(input.windowId, manifest.pluginId)
     val localIpcEndpoints =
         if (input.securityRequired) {
-            // The child connects to the host kernel endpoint. Its own process endpoint is created
-            // after the native spawn by ChildProcessBootstrap, so it cannot be a preflighted host
-            // capability (Windows named-pipe ACL enforcement requires an existing endpoint).
-            listOf(IpcAddressResolver.kernelAddress()).map(::parseProtectedLocalIpcEndpoint)
+            // Both directions are host-owned launch capabilities: the child connects to the
+            // kernel, and the host connects back to the child after it registers. Windows
+            // materializes both named-pipe instances before Cageforge preflight.
+            listOf(
+                IpcAddressResolver.kernelAddress(),
+                IpcAddressResolver.resolveAddress("plugin", pluginProcessId(input.windowId, manifest.pluginId)),
+            ).map(::parseProtectedLocalIpcEndpoint)
         } else {
             emptyList()
         }

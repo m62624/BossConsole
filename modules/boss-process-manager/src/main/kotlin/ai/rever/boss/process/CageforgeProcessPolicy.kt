@@ -24,6 +24,7 @@ sealed interface CageforgeLocalIpcEndpoint {
 data class CageforgeProcessPolicy(
     val toml: String,
     val profileName: String? = null,
+    internal val localIpcEndpoints: List<CageforgeLocalIpcEndpoint> = emptyList(),
 ) {
     init {
         require(toml.isNotBlank()) { "Cageforge TOML must not be blank" }
@@ -82,6 +83,7 @@ data class CageforgeProcessPolicy(
                         ),
                 ),
                 CAGEFORGE_PROFILE_NAME,
+                distinctEndpoints,
             )
         }
 

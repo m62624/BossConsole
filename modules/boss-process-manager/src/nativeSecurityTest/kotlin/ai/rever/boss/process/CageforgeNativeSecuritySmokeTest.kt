@@ -400,6 +400,7 @@ private fun authenticatedIpcConfig(
                     .takeIf { it.isDirectory },
             )
     val diagnostic = workspace.resolve("auth-diag.txt")
+    val processAddress = IpcAddressResolver.resolveAddress("plugin", processId)
     Files.writeString(
         diagnostic,
         "java.home=${System.getProperty("java.home")}\n" +
@@ -418,7 +419,8 @@ private fun authenticatedIpcConfig(
             CageforgeProcessPolicy.workspace(
                 workspace.toFile(),
                 readRoots,
-                localIpcEndpoints = listOf(kernelAddress).map(::nativeLocalIpcEndpoint),
+                localIpcEndpoints =
+                    listOf(kernelAddress, processAddress).map(::nativeLocalIpcEndpoint),
                 runtimeExecutableRoots = javaRuntimeExecutableRoots(workspace),
             ),
     )
