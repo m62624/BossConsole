@@ -40,13 +40,12 @@ class CageforgeNativeSecuritySmokeTest {
         val logs = nativeSecurityTempDirectory("boss-cageforge-auth-logs-")
         val kernelAddress = IpcAddressResolver.kernelAddress()
         val processId = "native-security-auth"
-        val processAddress = IpcAddressResolver.resolveAddress("plugin", processId)
         var server: BossIpcServer? = null
         var managed: ManagedProcess? = null
         try {
             val kernel = startAuthenticatedKernel(kernelAddress)
             server = kernel.server
-            val config = authenticatedIpcConfig(workspace, processId, kernelAddress, processAddress)
+            val config = authenticatedIpcConfig(workspace, processId, kernelAddress)
 
             managed =
                 ProcessSpawner(
@@ -373,7 +372,6 @@ private fun authenticatedIpcConfig(
     workspace: Path,
     processId: String,
     kernelAddress: String,
-    processAddress: String,
 ): ProcessConfig {
     val classpath = nativeSecurityClasspath()
     val javaExecutable = ProcessSpawner.findJavaExecutable()
@@ -420,10 +418,7 @@ private fun authenticatedIpcConfig(
             CageforgeProcessPolicy.workspace(
                 workspace.toFile(),
                 readRoots,
-                localIpcEndpoints =
-                    listOf(kernelAddress, processAddress).map(
-                        ::nativeLocalIpcEndpoint,
-                    ),
+                localIpcEndpoints = listOf(kernelAddress).map(::nativeLocalIpcEndpoint),
                 runtimeExecutableRoots = javaRuntimeExecutableRoots(workspace),
             ),
     )
