@@ -57,10 +57,10 @@ internal fun ProtectedPluginProcessConfig.prepare(): PreparedProtectedPluginLaun
     val processId = pluginProcessId(input.windowId, manifest.pluginId)
     val localIpcEndpoints =
         if (input.securityRequired) {
-            listOf(
-                IpcAddressResolver.kernelAddress(),
-                IpcAddressResolver.resolveAddress("plugin", processId),
-            ).map(::parseProtectedLocalIpcEndpoint)
+            // The child connects to the host kernel endpoint. Its own process endpoint is created
+            // after the native spawn by ChildProcessBootstrap, so it cannot be a preflighted host
+            // capability (Windows named-pipe ACL enforcement requires an existing endpoint).
+            listOf(IpcAddressResolver.kernelAddress()).map(::parseProtectedLocalIpcEndpoint)
         } else {
             emptyList()
         }
