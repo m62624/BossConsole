@@ -234,7 +234,6 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
         address = localAddress
         try {
             pendingConnection = NamedPipeConnection.createServer(localAddress.name)
-            WindowsNamedPipeTransport.markServerReady(localAddress.name)
         } catch (error: IllegalArgumentException) {
             WindowsNamedPipeTransport.markServerFailed(localAddress.name, error)
             throw error
@@ -263,6 +262,10 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
                     connection.close()
                     return@execute
                 }
+                // Cageforge reads the named-pipe ACL through a client handle. The pipe must already
+                // be listening before that handle can be opened; creating the server instance alone
+                // is not a sufficient readiness signal on Windows.
+                WindowsNamedPipeTransport.markServerReady(boundAddress.name)
                 connection.accept()
                 eventLoop().execute {
                     pendingConnection = null
