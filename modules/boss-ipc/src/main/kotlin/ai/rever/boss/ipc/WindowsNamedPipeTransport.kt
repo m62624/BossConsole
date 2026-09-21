@@ -69,7 +69,13 @@ internal object WindowsNamedPipeTransport {
 
     fun prepareForProtectedLaunch(address: WindowsNamedPipeAddress): AutoCloseable =
         NamedPipeConnection.createServer(address.name).let { connection ->
-            AutoCloseable { connection.close() }
+            runCatching {
+                connection.prepareForAclHandoff()
+                AutoCloseable { connection.close() }
+            }.getOrElse { error ->
+                connection.close()
+                throw error
+            }
         }
 
     fun awaitServerReady(address: WindowsNamedPipeAddress) {
@@ -347,6 +353,23 @@ private class NamedPipeConnection private constructor(
     fun accept() {
         while (!isClosed && !tryAccept()) {
             Thread.sleep(NAMED_PIPE_ACCEPT_POLL_MS)
+        }
+    }
+
+    /**
+     * Puts a protected-launch placeholder into the listening state without
+     * consuming it as a BOSS stream connection. Cageforge opens this instance
+     * briefly to inspect and lease its ACL before the child is created.
+     */
+    fun prepareForAclHandoff() {
+        if (Kernel32.INSTANCE.ConnectNamedPipe(handle, null)) {
+            switchToBlockingMode()
+            return
+        }
+        when (Kernel32.INSTANCE.GetLastError()) {
+            WinError.ERROR_PIPE_LISTENING -> Unit
+            WinError.ERROR_PIPE_CONNECTED -> switchToBlockingMode()
+            else -> throw win32Failure("ConnectNamedPipe")
         }
     }
 
