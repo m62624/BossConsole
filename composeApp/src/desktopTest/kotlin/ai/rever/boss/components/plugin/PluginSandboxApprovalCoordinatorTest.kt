@@ -11,6 +11,42 @@ import kotlin.test.assertTrue
 
 class PluginSandboxApprovalCoordinatorTest {
     @Test
+    fun `approval allows the protected launch approval boundary`() =
+        runBlocking {
+            supervisorScope {
+                val bus = PluginSandboxApprovalBus(defaultTimeoutMs = 1_000)
+                val approval =
+                    async {
+                        requestSandboxApproval(
+                            manifest =
+                                PluginManifest(
+                                    pluginId = "com.example.protected",
+                                    displayName = "Protected plugin",
+                                    version = "1.0.0",
+                                    apiVersion = "1.0.0",
+                                    mainClass = "example.Plugin",
+                                ),
+                            pluginId = "com.example.protected",
+                            sandboxRequest =
+                                PluginSandboxRequest(
+                                    filesystem =
+                                        listOf(
+                                            PluginSandboxFilesystemRequest("/workspace/models", "read"),
+                                        ),
+                                    network = emptyList(),
+                                    localIpc = emptyList(),
+                                ),
+                            approvalBus = bus,
+                        )
+                    }
+
+                val request = bus.requests.first()
+                assertTrue(bus.approve(request.id))
+                approval.await()
+            }
+        }
+
+    @Test
     fun `denial fails the protected launch approval boundary`() =
         runBlocking {
             supervisorScope {
