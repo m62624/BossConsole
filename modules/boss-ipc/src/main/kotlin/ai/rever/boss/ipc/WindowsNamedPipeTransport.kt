@@ -193,6 +193,7 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
         }
         check(address == null) { "Windows named-pipe server is already bound" }
         address = localAddress
+        pendingConnection = NamedPipeConnection.createServer(localAddress.name)
     }
 
     override fun doBeginRead() {
@@ -208,8 +209,11 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
             acceptThreadHandle = threadHandle
             try {
                 if (!open) return@execute
-                val connection = NamedPipeConnection.createServer(boundAddress.name)
-                pendingConnection = connection
+                val connection =
+                    pendingConnection
+                        ?: NamedPipeConnection.createServer(boundAddress.name).also {
+                            pendingConnection = it
+                        }
                 if (!open) {
                     connection.close()
                     return@execute
