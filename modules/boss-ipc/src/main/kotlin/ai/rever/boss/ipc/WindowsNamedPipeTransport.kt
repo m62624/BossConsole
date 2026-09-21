@@ -151,7 +151,8 @@ private val windowsKernel32Cancellation: WindowsKernel32Cancellation by lazy {
 private class StandaloneProtectedIpcEndpointLease(
     private val connection: NamedPipeConnection,
 ) : ProtectedIpcEndpointLease {
-    override fun handoffToChild() = close()
+    /** The child creates its own server instance while this ACL lease stays connected. */
+    override fun handoffToChild() = Unit
 
     override fun close() = connection.close()
 }
