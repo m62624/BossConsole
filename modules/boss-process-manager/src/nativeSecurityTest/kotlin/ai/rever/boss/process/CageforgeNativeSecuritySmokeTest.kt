@@ -94,7 +94,7 @@ class CageforgeNativeSecuritySmokeTest {
         var blockedServer: ServerSocketChannel? = null
         var managed: ManagedProcess? = null
         try {
-            if (isWindows()) {
+            if (isWindowsHost()) {
                 CageforgeWindowsNativeSecuritySupport.runLocalIpcSmoke(workspace, logs, result)
                 return
             }
@@ -164,7 +164,7 @@ class CageforgeNativeSecuritySmokeTest {
             val classpath = nativeSecurityClasspath()
             val javaExecutable = ProcessSpawner.findJavaExecutable()
             val readRoots =
-                classpathRoots(classpath) +
+                nativeSecurityReadRoots(classpath) +
                     listOf(File(System.getProperty("java.home")), File(javaExecutable))
             val config =
                 ProcessConfig(
@@ -224,7 +224,7 @@ class CageforgeNativeSecuritySmokeTest {
                 "BOSS_SMOKE_RESULT" to workspace.resolve("probe-result.txt").toString(),
             )
         val readRoots =
-            classpathRoots(classpath) +
+            nativeSecurityReadRoots(classpath) +
                 listOf(File(System.getProperty("java.home")), File(javaExecutable))
         return ProcessConfig(
             processId = "native-security-smoke",
@@ -254,7 +254,7 @@ class CageforgeNativeSecuritySmokeTest {
             "native security probe did not exit before output collection",
         )
         val output =
-            if (isWindows()) {
+            if (isWindowsHost()) {
                 awaitFileText(workspace.resolve("probe-result.txt"))
             } else {
                 process.inputStream
@@ -276,17 +276,11 @@ class CageforgeNativeSecuritySmokeTest {
         assertTrue(!networkReached, "probe must not reach a loopback listener")
     }
 
-    private fun classpathRoots(classpath: String): List<File> =
-        classpath
-            .split(File.pathSeparator)
-            .filter { it.isNotBlank() }
-            .map(::File)
-
     private fun nativeSecurityTempDirectory(prefix: String): Path {
         val systemTemp = File(System.getProperty("java.io.tmpdir")).toPath()
         val shortUnixTemp = File("/tmp").toPath()
         val root =
-            if (!isWindows() && Files.isDirectory(shortUnixTemp)) {
+            if (!isWindowsHost() && Files.isDirectory(shortUnixTemp)) {
                 shortUnixTemp
             } else {
                 systemTemp
@@ -384,10 +378,7 @@ private fun authenticatedIpcConfig(
     val classpath = nativeSecurityClasspath()
     val javaExecutable = ProcessSpawner.findJavaExecutable()
     val readRoots =
-        classpath
-            .split(File.pathSeparator)
-            .filter { it.isNotBlank() }
-            .map(::File) +
+        nativeSecurityReadRoots(classpath) +
             listOf(
                 File(System.getProperty("java.home")),
                 File(System.getProperty("java.home"), "conf").canonicalFile,
@@ -448,10 +439,7 @@ private fun createLocalIpcConfig(
     val classpath = nativeSecurityClasspath()
     val javaExecutable = ProcessSpawner.findJavaExecutable()
     val readRoots =
-        classpath
-            .split(File.pathSeparator)
-            .filter { it.isNotBlank() }
-            .map(::File) +
+        nativeSecurityReadRoots(classpath) +
             listOf(
                 File(System.getProperty("java.home")),
                 File(System.getProperty("java.home"), "conf").canonicalFile,
@@ -512,8 +500,6 @@ private fun readSocketByte(server: ServerSocketChannel?): Byte {
         buffer.array().single()
     }
 }
-
-private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
 private fun javaRuntimeExecutableRoots(workspace: Path): List<File> =
     buildList {

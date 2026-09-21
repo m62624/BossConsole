@@ -67,7 +67,7 @@ internal object CageforgeWindowsNativeSecuritySupport {
         val classpath = nativeSecurityClasspath()
         val javaExecutable = ProcessSpawner.findJavaExecutable()
         val readRoots =
-            classpathRootsForWindows(classpath) +
+            nativeSecurityReadRoots(classpath) +
                 listOf(File(System.getProperty("java.home")), File(javaExecutable))
         return ProcessConfig(
             processId = "native-security-ipc",
@@ -111,12 +111,6 @@ internal object CageforgeWindowsNativeSecuritySupport {
             allowedServer.stop()
         }
     }
-
-    private fun classpathRootsForWindows(classpath: String): List<File> =
-        classpath
-            .split(File.pathSeparator)
-            .filter(String::isNotBlank)
-            .map(::File)
 
     private fun awaitWindowsResult(path: Path): String {
         repeat(200) {
