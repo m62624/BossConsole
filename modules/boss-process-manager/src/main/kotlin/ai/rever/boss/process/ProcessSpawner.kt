@@ -4,6 +4,7 @@ import ai.cageforge.Cageforge
 import ai.cageforge.CageforgeProcess
 import ai.cageforge.RuntimeContext
 import ai.rever.boss.ipc.IpcAddressResolver
+import ai.rever.boss.ipc.ProtectedIpcEndpointLease
 import ai.rever.boss.ipc.auth.IpcEnvironment
 import ai.rever.boss.ipc.auth.IpcTlsIdentity
 import ai.rever.boss.ipc.auth.ProcessTokenRegistry
@@ -226,6 +227,9 @@ class ProcessSpawner
                     preparedIpcEndpoints.asReversed().forEach(AutoCloseable::close)
                 }
             }
+            val handoffPreparedIpc = {
+                preparedIpcEndpoints.forEach(ProtectedIpcEndpointLease::handoffToChild)
+            }
             val runtime = createCageforgeRuntime(policy, workDir, closePreparedIpc)
             var child: CageforgeProcess? = null
             val runtimeClosed = AtomicBoolean(false)
@@ -243,7 +247,7 @@ class ProcessSpawner
                 val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
                 child = process
                 process.onExit().whenComplete { _, _ -> runCatching { closeNativeResources() } }
-                closePreparedIpc()
+                handoffPreparedIpc()
                 ProtectedEnvironmentChannel.send(
                     process.inputStream,
                     process.outputStream,

@@ -67,11 +67,20 @@ internal object WindowsNamedPipeTransport {
         serverReadiness.computeIfAbsent(address.name) { CompletableFuture() }
     }
 
-    fun prepareForProtectedLaunch(address: WindowsNamedPipeAddress): AutoCloseable =
+    fun prepareForProtectedLaunch(address: WindowsNamedPipeAddress): ProtectedIpcEndpointLease {
+        val server = WindowsNamedPipeRegistry.find(address.name)
+        return if (server != null) {
+            server.reserveForProtectedLaunch()
+        } else {
+            prepareStandaloneEndpoint(address)
+        }
+    }
+
+    private fun prepareStandaloneEndpoint(address: WindowsNamedPipeAddress): ProtectedIpcEndpointLease =
         NamedPipeConnection.createServer(address.name).let { connection ->
             runCatching {
                 connection.prepareForAclHandoff()
-                AutoCloseable { connection.close() }
+                StandaloneProtectedIpcEndpointLease(connection)
             }.getOrElse { error ->
                 connection.close()
                 throw error
@@ -103,6 +112,7 @@ internal object WindowsNamedPipeTransport {
 
     fun forgetServer(address: WindowsNamedPipeAddress) {
         serverReadiness.remove(address.name)
+        WindowsNamedPipeRegistry.remove(address.name)
     }
 
     fun newEventLoopGroup() =
@@ -136,6 +146,14 @@ private interface WindowsKernel32Cancellation : Library {
 
 private val windowsKernel32Cancellation: WindowsKernel32Cancellation by lazy {
     Native.load("kernel32", WindowsKernel32Cancellation::class.java)
+}
+
+private class StandaloneProtectedIpcEndpointLease(
+    private val connection: NamedPipeConnection,
+) : ProtectedIpcEndpointLease {
+    override fun handoffToChild() = close()
+
+    override fun close() = connection.close()
 }
 
 private fun rejectClientBind(): Nothing = throw UnsupportedOperationException(NAMED_PIPE_CLIENT_BIND_ERROR)
@@ -214,6 +232,25 @@ private abstract class UnsupportedNamedPipeServerChannel :
     override fun doWrite(buffer: ChannelOutboundBuffer): Unit = rejectServerWrite()
 }
 
+private object WindowsNamedPipeRegistry {
+    private val servers = ConcurrentHashMap<String, WindowsNamedPipeServerChannel>()
+
+    fun find(name: String): WindowsNamedPipeServerChannel? = servers[name]
+
+    fun register(
+        name: String,
+        server: WindowsNamedPipeServerChannel,
+    ) {
+        check(servers.putIfAbsent(name, server) == null) {
+            "Windows named-pipe server is already registered: $name"
+        }
+    }
+
+    fun remove(name: String) {
+        servers.remove(name)
+    }
+}
+
 private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel() {
     private val config = DefaultChannelConfig(this)
     private val acceptExecutor: ExecutorService =
@@ -221,9 +258,14 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
             Thread(runnable, "boss-ipc-windows-pipe-accept").apply { isDaemon = true }
         }
     private val acceptPending = AtomicBoolean(false)
+    private val lifecycleLock = Any()
     private var address: WindowsNamedPipeAddress? = null
 
     @Volatile private var pendingConnection: NamedPipeConnection? = null
+
+    @Volatile private var protectedConnection: NamedPipeConnection? = null
+
+    @Volatile private var protectedLaunchReserved = false
 
     @Volatile private var acceptThreadHandle: WinNT.HANDLE? = null
 
@@ -247,60 +289,163 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
         address = localAddress
         try {
             pendingConnection = NamedPipeConnection.createServer(localAddress.name)
+            WindowsNamedPipeRegistry.register(localAddress.name, this)
         } catch (error: IllegalArgumentException) {
+            pendingConnection?.close()
+            pendingConnection = null
             WindowsNamedPipeTransport.markServerFailed(localAddress.name, error)
             throw error
         }
     }
 
-    override fun doBeginRead() {
-        val boundAddress = address ?: return
-        if (!open || !acceptPending.compareAndSet(false, true)) return
-        acceptExecutor.execute {
-            val threadHandle =
-                Kernel32.INSTANCE.OpenThread(
-                    WinNT.THREAD_TERMINATE,
-                    false,
-                    Kernel32.INSTANCE.GetCurrentThreadId(),
-                )
-            acceptThreadHandle = threadHandle
-            try {
-                if (!open) return@execute
-                val connection =
-                    pendingConnection
-                        ?: NamedPipeConnection.createServer(boundAddress.name).also {
-                            pendingConnection = it
-                        }
-                if (!open) {
+    val reserveForProtectedLaunch: () -> ProtectedIpcEndpointLease = {
+        val boundAddress = checkNotNull(address)
+        val connection =
+            synchronized(lifecycleLock) {
+                check(open) { "Windows named-pipe server is closed" }
+                check(!protectedLaunchReserved) {
+                    "Windows named-pipe server already has a protected launch reservation"
+                }
+                protectedLaunchReserved = true
+                acceptThreadHandle?.let(windowsKernel32Cancellation::CancelSynchronousIo)
+                pendingConnection?.close()
+                pendingConnection = NamedPipeConnection.createServer(boundAddress.name)
+                checkNotNull(pendingConnection)
+            }
+        val lease = ProtectedLaunchLease(connection)
+        runCatching {
+            connection.prepareForAclHandoff()
+            lease
+        }.getOrElse { error ->
+            lease.close()
+            throw error
+        }
+    }
+
+    private inner class ProtectedLaunchLease(
+        private val connection: NamedPipeConnection,
+    ) : ProtectedIpcEndpointLease {
+        private val handedOff = AtomicBoolean(false)
+        private val closed = AtomicBoolean(false)
+
+        override fun handoffToChild() {
+            if (!handedOff.compareAndSet(false, true)) return
+            synchronized(lifecycleLock) {
+                check(protectedLaunchReserved) {
+                    "Windows named-pipe protected launch reservation is no longer active"
+                }
+                check(pendingConnection === connection) {
+                    "Windows named-pipe protected launch connection was replaced"
+                }
+                pendingConnection = NamedPipeConnection.createServer(checkNotNull(address).name)
+                protectedConnection = connection
+                protectedLaunchReserved = false
+                acceptPending.set(false)
+            }
+            eventLoop().execute { read() }
+        }
+
+        override fun close() {
+            if (!closed.compareAndSet(false, true)) return
+            val resume =
+                synchronized(lifecycleLock) {
+                    if (pendingConnection === connection) pendingConnection = null
+                    if (protectedConnection === connection) protectedConnection = null
                     connection.close()
-                    return@execute
-                }
-                connection.accept()
-                eventLoop().execute {
-                    pendingConnection = null
-                    acceptPending.set(false)
-                    if (open) {
-                        pipeline().fireChannelRead(WindowsNamedPipeChannel(this, connection, boundAddress))
-                        pipeline().fireChannelReadComplete()
-                        if (config.isAutoRead) read()
-                    } else {
-                        connection.close()
+                    protectedLaunchReserved = false
+                    if (open && pendingConnection == null) {
+                        pendingConnection = NamedPipeConnection.createServer(checkNotNull(address).name)
                     }
+                    acceptPending.set(false)
+                    open
                 }
-            } catch (error: IOException) {
-                reportAcceptFailure(error)
-            } catch (error: IllegalArgumentException) {
-                reportAcceptFailure(error)
-            } finally {
-                acceptThreadHandle = null
-                threadHandle?.let(Kernel32.INSTANCE::CloseHandle)
+            if (resume) eventLoop().execute { read() }
+        }
+    }
+
+    private val acceptOperation = AcceptOperation()
+
+    private inner class AcceptOperation {
+        fun start(boundAddress: WindowsNamedPipeAddress) {
+            acceptExecutor.execute {
+                val threadHandle =
+                    Kernel32.INSTANCE.OpenThread(
+                        WinNT.THREAD_TERMINATE,
+                        false,
+                        Kernel32.INSTANCE.GetCurrentThreadId(),
+                    )
+                acceptThreadHandle = threadHandle
+                try {
+                    val connection =
+                        synchronized(lifecycleLock) {
+                            if (!open || protectedLaunchReserved) {
+                                acceptPending.set(false)
+                                return@execute
+                            }
+                            pendingConnection
+                                ?: NamedPipeConnection.createServer(boundAddress.name).also {
+                                    pendingConnection = it
+                                }
+                        }
+                    if (!open || protectedLaunchReserved) {
+                        connection.close()
+                        return@execute
+                    }
+                    connection.accept()
+                    eventLoop().execute {
+                        val deliver =
+                            synchronized(lifecycleLock) {
+                                if (pendingConnection === connection) pendingConnection = null
+                                acceptPending.set(false)
+                                open && !protectedLaunchReserved && !connection.isClosed
+                            }
+                        if (deliver) {
+                            pipeline().fireChannelRead(
+                                WindowsNamedPipeChannel(this@WindowsNamedPipeServerChannel, connection, boundAddress),
+                            )
+                            pipeline().fireChannelReadComplete()
+                            if (config.isAutoRead) read()
+                        } else {
+                            connection.close()
+                        }
+                    }
+                } catch (error: IOException) {
+                    reportAcceptFailure(error)
+                } catch (error: IllegalArgumentException) {
+                    reportAcceptFailure(error)
+                } finally {
+                    acceptThreadHandle = null
+                    threadHandle?.let(Kernel32.INSTANCE::CloseHandle)
+                }
             }
         }
     }
 
+    override fun doBeginRead() {
+        val boundAddress = address ?: return
+        if (
+            !open ||
+            protectedLaunchReserved ||
+            !acceptPending.compareAndSet(false, true)
+        ) {
+            return
+        }
+        acceptOperation.start(boundAddress)
+    }
+
     private fun reportAcceptFailure(error: Exception) {
-        pendingConnection?.close()
-        pendingConnection = null
+        val report =
+            synchronized(lifecycleLock) {
+                if (protectedLaunchReserved) {
+                    acceptPending.set(false)
+                    false
+                } else {
+                    pendingConnection?.close()
+                    pendingConnection = null
+                    true
+                }
+            }
+        if (!report) return
         eventLoop().execute {
             acceptPending.set(false)
             if (open) pipeline().fireExceptionCaught(error)
@@ -318,8 +463,14 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
             )
         }
         acceptThreadHandle?.let { windowsKernel32Cancellation.CancelSynchronousIo(it) }
-        pendingConnection?.close()
-        pendingConnection = null
+        synchronized(lifecycleLock) {
+            pendingConnection?.close()
+            pendingConnection = null
+            protectedConnection?.close()
+            protectedConnection = null
+            protectedLaunchReserved = false
+        }
+        address?.let { WindowsNamedPipeRegistry.remove(it.name) }
         acceptExecutor.shutdownNow()
     }
 }
