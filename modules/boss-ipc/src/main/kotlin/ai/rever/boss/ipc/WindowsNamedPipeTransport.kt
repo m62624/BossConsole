@@ -21,9 +21,13 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.SocketAddress
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** A typed SocketAddress for the Windows `\\.\pipe\` namespace. */
@@ -49,11 +53,46 @@ internal class WindowsNamedPipeAddress(
  * without introducing a TCP relay or a second broker process.
  */
 internal object WindowsNamedPipeTransport {
+    private const val SERVER_READY_TIMEOUT_MS = 5_000L
+
+    private val serverReadiness = ConcurrentHashMap<String, CompletableFuture<Unit>>()
+
     fun newClientChannelFactory(): io.netty.channel.ChannelFactory<out Channel> =
         io.netty.channel.ChannelFactory { WindowsNamedPipeChannel() }
 
     fun newServerChannelFactory(): io.netty.channel.ChannelFactory<out ServerChannel> =
         io.netty.channel.ChannelFactory { WindowsNamedPipeServerChannel() }
+
+    fun prepareServer(address: WindowsNamedPipeAddress) {
+        serverReadiness.computeIfAbsent(address.name) { CompletableFuture() }
+    }
+
+    fun awaitServerReady(address: WindowsNamedPipeAddress) {
+        try {
+            serverReadiness
+                .computeIfAbsent(address.name) { CompletableFuture() }
+                .get(SERVER_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (error: ExecutionException) {
+            throw IllegalStateException("Windows named-pipe server failed to bind", error)
+        } catch (error: java.util.concurrent.TimeoutException) {
+            throw IllegalStateException("Windows named-pipe server did not become ready", error)
+        }
+    }
+
+    fun markServerReady(name: String) {
+        serverReadiness[name]?.complete(Unit)
+    }
+
+    fun markServerFailed(
+        name: String,
+        error: Throwable,
+    ) {
+        serverReadiness[name]?.completeExceptionally(error)
+    }
+
+    fun forgetServer(address: WindowsNamedPipeAddress) {
+        serverReadiness.remove(address.name)
+    }
 
     fun newEventLoopGroup() =
         // Netty's OioEventLoopGroup is thread-per-channel and intentionally throws from
@@ -193,7 +232,13 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
         }
         check(address == null) { "Windows named-pipe server is already bound" }
         address = localAddress
-        pendingConnection = NamedPipeConnection.createServer(localAddress.name)
+        try {
+            pendingConnection = NamedPipeConnection.createServer(localAddress.name)
+            WindowsNamedPipeTransport.markServerReady(localAddress.name)
+        } catch (error: IllegalArgumentException) {
+            WindowsNamedPipeTransport.markServerFailed(localAddress.name, error)
+            throw error
+        }
     }
 
     override fun doBeginRead() {
@@ -254,6 +299,12 @@ private class WindowsNamedPipeServerChannel : UnsupportedNamedPipeServerChannel(
 
     override fun doClose() {
         open = false
+        address?.let {
+            WindowsNamedPipeTransport.markServerFailed(
+                it.name,
+                IOException("Windows named-pipe server closed"),
+            )
+        }
         acceptThreadHandle?.let { windowsKernel32Cancellation.CancelSynchronousIo(it) }
         pendingConnection?.close()
         pendingConnection = null

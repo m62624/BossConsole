@@ -67,6 +67,16 @@ class BossIpcServer(
         builder.fallbackHandlerRegistry(lateServices)
         builder.intercept(ProcessIdentityInterceptor(tokenRegistry))
         server = builder.build().start()
+        if (address.startsWith("pipe://")) {
+            val pipeAddress = IpcAddressResolver.parseAddress(address) as WindowsNamedPipeAddress
+            try {
+                WindowsNamedPipeTransport.awaitServerReady(pipeAddress)
+            } catch (error: IllegalStateException) {
+                server?.shutdownNow()
+                IpcAddressResolver.cleanupAddress(address)
+                throw error
+            }
+        }
         logger.info("IPC server started on: {}", address)
         IpcAddressResolver.secureSocketFile(address)
     }

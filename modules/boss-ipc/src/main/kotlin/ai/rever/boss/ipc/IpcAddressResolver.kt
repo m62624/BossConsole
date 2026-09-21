@@ -188,6 +188,7 @@ object IpcAddressResolver {
             }
 
             is WindowsNamedPipeAddress -> {
+                WindowsNamedPipeTransport.prepareServer(parsed)
                 NettyServerBuilder
                     .forAddress(parsed)
                     .channelFactory(WindowsNamedPipeTransport.newServerChannelFactory())
@@ -254,6 +255,9 @@ object IpcAddressResolver {
      * Clean up socket file on shutdown.
      */
     fun cleanupAddress(address: String) {
+        if (address.startsWith("pipe://")) {
+            WindowsNamedPipeTransport.forgetServer(WindowsNamedPipeAddress(address.removePrefix("pipe://")))
+        }
         if (address.startsWith("unix://")) {
             val path = address.removePrefix("unix://")
             File(path).delete()
