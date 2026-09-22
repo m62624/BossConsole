@@ -11,7 +11,7 @@ import ai.cageforge.WindowsSetupState
 class CageforgeSessionLauncher {
     fun prepare(command: SandboxCommand): SandboxSessionPlan {
         val snapshot = SandboxPolicySnapshot.read(command)
-        // In 0.6.1 checkToml also initializes JNI. permissionRequest expects it loaded.
+        // checkToml also initializes JNI; permissionRequest expects it loaded.
         Cageforge.checkToml(
             snapshot.toml,
             SandboxPolicySnapshot.LAUNCH_PROFILE,

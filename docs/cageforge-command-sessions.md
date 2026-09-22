@@ -11,7 +11,7 @@ and plugin execution are outside this feature and retain their existing behavior
 A session selects a project directory, a TOML file, a named CLI profile, and an
 executable with separate arguments. BOSS reads the policy once, adds a final child
 profile containing that exact command and working directory, then asks Cageforge
-Java 0.6.1 for its permission request. Approval identifies this immutable snapshot.
+Java 0.7.0 for its permission request. Approval identifies this immutable snapshot.
 Edits to the TOML file affect the next preparation, never a running session. A plan
 can launch once. A failed launch has no unsandboxed retry or fallback.
 
