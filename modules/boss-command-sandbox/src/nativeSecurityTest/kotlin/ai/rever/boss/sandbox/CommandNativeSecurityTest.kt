@@ -1,6 +1,7 @@
 package ai.rever.boss.sandbox
 
 import ai.cageforge.CageforgeConfigurationException
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -40,20 +41,18 @@ class CommandNativeSecurityTest {
             val plan = launcher.prepare(command)
             // A disk edit cannot replace the already reviewed command/policy snapshot.
             Files.writeString(command.policyFile, "malformed replacement")
-            launcher.launch(plan, plan.approvalDigest).use { session ->
-                session.process.outputStream.close()
-                assertTrue(session.process.waitFor(30, TimeUnit.SECONDS), "Native probe timed out")
-                val output =
-                    session.process.inputStream
-                        .bufferedReader()
-                        .readText()
-                val errors =
-                    session.process.errorStream
-                        .bufferedReader()
-                        .readText()
-                assertEquals(0, session.process.exitValue(), errors)
-                assertTrue(output.contains("SECURITY_OK:root"), output)
-                assertTrue(output.contains("SECURITY_OK:descendant"), output)
+            runBlocking {
+                val session = launcher.launch(plan, plan.approvalDigest).manage()
+                try {
+                    session.closeInput()
+                    val output = session.awaitCompletion()
+                    assertEquals(null, output.failure, output.failure?.stackTraceToString())
+                    assertEquals(0, output.exitCode, output.stderr.text)
+                    assertTrue(output.stdout.text.contains("SECURITY_OK:root"), output.stdout.text)
+                    assertTrue(output.stdout.text.contains("SECURITY_OK:descendant"), output.stdout.text)
+                } finally {
+                    session.stop()
+                }
             }
         }
         assertTrue(Files.exists(project.resolve("root-allowed")))

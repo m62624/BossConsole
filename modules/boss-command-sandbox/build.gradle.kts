@@ -8,6 +8,7 @@ java {
 
 dependencies {
     implementation(libs.cageforge.java)
+    api(libs.kotlinx.coroutines.core)
     testImplementation(libs.kotlin.test.junit)
 }
 
@@ -45,6 +46,7 @@ tasks.withType<Test>().configureEach {
     val testHome = layout.buildDirectory.dir("test-home/$name")
     systemProperty("user.home", testHome.get().asFile.absolutePath)
     doFirst {
+        systemProperty("boss.sandbox.test.classpath", classpath.asPath)
         testHome.get().asFile.deleteRecursively()
         testHome.get().asFile.mkdirs()
     }
