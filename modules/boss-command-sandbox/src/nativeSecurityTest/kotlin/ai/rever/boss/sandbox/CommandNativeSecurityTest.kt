@@ -96,6 +96,13 @@ class CommandNativeSecurityTest {
         val classpathRoots = probeClasspath.split(File.pathSeparator).map { Path.of(it).toRealPath() }
         val roots = (classpathRoots + listOf(javaHome)).distinct()
         val rules = roots.joinToString(",\n") { "{ target = \"absolute\", path = ${quote(it)}, access = \"read\" }" }
+        // Platform overlays are validated using their target's path syntax, even on another OS.
+        val macosRuntime =
+            if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
+                "[profiles.base.platforms.macos.runtime]\nexecutable_roots = [${quote(javaHome)}]"
+            } else {
+                ""
+            }
         val policy = project.resolve("cageforge.toml")
         Files.writeString(
             policy,
@@ -116,8 +123,7 @@ class CommandNativeSecurityTest {
             [profiles.base.command.environment]
             inherit = "core"
             set = { BOSS_SANDBOX_VALUE = "parent" }
-            [profiles.base.platforms.macos.runtime]
-            executable_roots = [${quote(javaHome)}]
+            $macosRuntime
             [profiles.cli]
             inherits = ["base"]
             [profiles.cli.command.environment]
