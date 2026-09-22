@@ -51,6 +51,34 @@ verifies existing setup; it never invokes UAC implicitly.
 The session uses pipes. This does not promise a PTY, terminal emulation, resize
 support, or compatibility with CLIs that require a controlling terminal.
 
+## Additional permission requests
+
+Cageforge 0.7.0 supports explicit permission escalation. The integration must use
+its `requestEscalation`, `approveEscalation` and `launchEscalated` APIs, not rewrite
+the running process's policy. The native contract requires a new immutable sandbox;
+relaunching a session must stop its previous process boundary first. It is not an
+in-place permission change or a promise to preserve an agent's in-memory state.
+
+The MCP request must identify the command, project/session, additional filesystem
+or network capabilities, and a human-readable reason. The agent requests access;
+it never supplies the approval decision. BOSS must show the exact command and
+resolved native permissions in the GUI before launching anything with more access.
+Ordinary MCP tool trust is not authorization for arbitrary sandbox capabilities.
+
+The host consent queue implements these two scopes:
+
+- **Allow once**: one execution of the reviewed command and policy. Replaying the
+  authorization is rejected, including after a failed launch.
+- **Allow until BOSS closes**: remember only the exact reviewed command, policy
+  and capabilities in this application process. Changed requests still prompt.
+  Nothing is persisted; restarting BOSS asks again. Revocation invalidates pending
+  responses and unused authorizations as well as remembered decisions.
+
+Denial, timeout, cancellation, queue overflow and application shutdown never grant
+permission. A stale dialog cannot approve the next request. This consent mechanism
+and its unit tests are implemented in the session module; native escalation and
+GUI/MCP wiring remain integration work, not verified end-to-end functionality.
+
 ## Verification work
 
 The command session module separates immutable preparation and native launch from
