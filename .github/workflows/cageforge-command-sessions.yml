@@ -34,8 +34,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      BOSS_CAGEFORGE_SETUP_MARKER: ${{ runner.temp }}/boss-command-setup-owned
     steps:
       - uses: actions/checkout@v7
         with:
@@ -64,6 +62,8 @@ jobs:
           echo "BOSS_NATIVE_CP=$classpath" >> "$GITHUB_ENV"
       - name: Explicit Windows setup
         if: runner.os == 'Windows'
+        env:
+          BOSS_CAGEFORGE_SETUP_MARKER: ${{ runner.temp }}/boss-command-setup-owned
         run: java -cp "$BOSS_NATIVE_CP" ai.rever.boss.sandbox.CommandWindowsSetup install
       - name: Native root and descendant enforcement
         timeout-minutes: 6
@@ -73,6 +73,8 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/boss-command-native.log"
       - name: Remove owned Windows setup
         if: always() && runner.os == 'Windows'
+        env:
+          BOSS_CAGEFORGE_SETUP_MARKER: ${{ runner.temp }}/boss-command-setup-owned
         run: |
           if [[ -f "$BOSS_CAGEFORGE_SETUP_MARKER" ]]; then
             java -cp "$BOSS_NATIVE_CP" ai.rever.boss.sandbox.CommandWindowsSetup uninstall

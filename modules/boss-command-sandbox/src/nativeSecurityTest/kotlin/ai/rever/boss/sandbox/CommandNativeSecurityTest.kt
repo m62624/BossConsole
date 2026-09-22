@@ -93,7 +93,8 @@ class CommandNativeSecurityTest {
         project: Path,
         arguments: List<String>,
     ): SandboxCommand {
-        val roots = (probeClasspath.split(File.pathSeparator).map { Path.of(it).toRealPath() } + javaHome).distinct()
+        val classpathRoots = probeClasspath.split(File.pathSeparator).map { Path.of(it).toRealPath() }
+        val roots = (classpathRoots + listOf(javaHome)).distinct()
         val rules = roots.joinToString(",\n") { "{ target = \"absolute\", path = ${quote(it)}, access = \"read\" }" }
         val policy = project.resolve("cageforge.toml")
         Files.writeString(
