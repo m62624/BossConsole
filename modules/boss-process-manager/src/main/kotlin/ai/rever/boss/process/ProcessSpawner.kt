@@ -1,11 +1,72 @@
 package ai.rever.boss.process
 
+import ai.cageforge.Cageforge
+import ai.cageforge.CageforgeProcess
+import ai.cageforge.RuntimeContext
 import ai.rever.boss.ipc.IpcAddressResolver
+import ai.rever.boss.ipc.ProtectedIpcEndpointLease
 import ai.rever.boss.ipc.auth.IpcEnvironment
 import ai.rever.boss.ipc.auth.IpcTlsIdentity
 import ai.rever.boss.ipc.auth.ProcessTokenRegistry
+import ai.rever.boss.ipc.prepareProtectedIpcEndpoint
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+private const val CAGEFORGE_TERMINATION_TIMEOUT_MS = 10_000L
+
+private data class StartedProcess(
+    val process: Process,
+    val nativeCleanup: (() -> Unit)? = null,
+)
+
+private fun terminateFailedCageforgeProcess(
+    child: CageforgeProcess,
+    failure: Throwable,
+) {
+    runCatching {
+        child.destroyForcibly()
+        if (
+            !child.waitFor(
+                CAGEFORGE_TERMINATION_TIMEOUT_MS,
+                TimeUnit.MILLISECONDS,
+            )
+        ) {
+            failure.addSuppressed(
+                IllegalStateException(
+                    "Cageforge child did not terminate within " +
+                        "$CAGEFORGE_TERMINATION_TIMEOUT_MS ms",
+                ),
+            )
+        }
+    }.onFailure { cleanupFailure ->
+        if (cleanupFailure is InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        failure.addSuppressed(cleanupFailure)
+    }
+    runCatching { child.close() }.onFailure(failure::addSuppressed)
+}
+
+private fun createCageforgeRuntime(
+    policy: CageforgeProcessPolicy,
+    workDir: File,
+    closePreparedIpc: () -> Unit,
+): Cageforge {
+    val runtimeContext = RuntimeContext(currentDirectory = workDir.toPath())
+    return runCatching {
+        Cageforge.checkToml(policy.toml, policy.profileName, runtimeContext)
+        Cageforge.fromToml(
+            policy.toml,
+            policy.profileName,
+            runtimeContext,
+        )
+    }.getOrElse { error ->
+        closePreparedIpc()
+        throw error
+    }
+}
 
 /**
  * Spawns child processes (either GraalVM native images or JVM subprocesses).
@@ -30,7 +91,7 @@ class ProcessSpawner
         private val logDir: File =
             File(
                 System.getenv("BOSS_DATA_DIR")
-                    ?: "${System.getProperty("user.home")}/.boss",
+                    ?: File(System.getProperty("user.home"), ".boss").path,
                 "logs",
             ),
         private val registry: ProcessRegistry? = null,
@@ -54,10 +115,17 @@ class ProcessSpawner
             // Validate before socket or log creation, not after a caller-selected directory is made.
             IpcAddressResolver.validateProcessIdentifier(config.processId)
             val ipcAddress =
-                IpcAddressResolver.resolveAddress(
-                    config.processType.name.lowercase(),
-                    config.processId,
-                )
+                if (config.cageforge == null) {
+                    IpcAddressResolver.resolveUnprotectedAddress(
+                        config.processType.name.lowercase(),
+                        config.processId,
+                    )
+                } else {
+                    IpcAddressResolver.resolveAddress(
+                        config.processType.name.lowercase(),
+                        config.processId,
+                    )
+                }
 
             val command = buildCommand(config)
 
@@ -67,29 +135,15 @@ class ProcessSpawner
                 config.processType,
             )
 
-            val processBuilder =
-                ProcessBuilder(command)
-                    .directory(config.workDir)
-
-            // Set environment variables
-            processBuilder.environment().apply {
-                putAll(config.environment)
-                put("BOSS_KERNEL_IPC_ADDR", kernelIpcAddress)
-                put("BOSS_PROCESS_ID", config.processId)
-                put("BOSS_PROCESS_TYPE", config.processType.name)
-                put("BOSS_IPC_ADDR", ipcAddress)
-                IpcEnvironment.removeCredentials(this)
-                // Minted after config.environment, so nothing a caller supplies can shadow the real
-                // credential — only the kernel gets to say what a process's own token is. Never logged.
-            }
+            val childEnvironment = buildChildEnvironment(config, ipcAddress)
 
             val logs = ProcessLogStreams.acquire(logDir.toPath(), config.processId)
             var security: SpawnIpcSecurity? = null
-            val process =
+            val started =
                 runCatching {
                     security = SpawnIpcSecurity.create(tokenRegistry, kernelIdentity, config, ipcAddress)
-                    security?.install(processBuilder.environment())
-                    startWithLogs(processBuilder, logs)
+                    security?.install(childEnvironment)
+                    startProcess(command, config, childEnvironment, logs)
                 }.onFailure {
                     try {
                         logs.close()
@@ -97,6 +151,7 @@ class ProcessSpawner
                         security?.revoke()
                     }
                 }.getOrThrow()
+            val process = started.process
             process.onExit().thenRun { security?.revoke() }
 
             logger.info(
@@ -110,9 +165,165 @@ class ProcessSpawner
                 config = config,
                 process = process,
                 ipcAddress = ipcAddress,
+                nativeCleanup = started.nativeCleanup,
             ).also {
                 it.ipcClient = security?.client
                 registry?.register(config.processId, it)
+            }
+        }
+
+        private fun buildChildEnvironment(
+            config: ProcessConfig,
+            ipcAddress: String,
+        ): MutableMap<String, String> =
+            linkedMapOf<String, String>().apply {
+                putAll(config.environment)
+                put("BOSS_KERNEL_IPC_ADDR", kernelIpcAddress)
+                put("BOSS_PROCESS_ID", config.processId)
+                put("BOSS_PROCESS_TYPE", config.processType.name)
+                put("BOSS_IPC_ADDR", ipcAddress)
+                IpcEnvironment.removeCredentials(this)
+                if (config.cageforge != null && CageforgePlatform.current() == CageforgePlatform.MACOS) {
+                    val workDir = config.workDir.canonicalFile.path
+                    put("HOME", workDir)
+                    put("TMPDIR", workDir + File.separator)
+                }
+                // The kernel owns the credential values and they are never logged.
+            }
+
+        private fun startProcess(
+            command: List<String>,
+            config: ProcessConfig,
+            environment: Map<String, String>,
+            logs: ProcessLogStreams,
+        ): StartedProcess {
+            if (config.cageforge != null) {
+                return startWithCageforge(command, config, environment).also {
+                    attachLogs(it.process, logs)
+                }
+            }
+
+            val processBuilder = ProcessBuilder(command).directory(config.workDir)
+            processBuilder.environment().putAll(environment)
+            return StartedProcess(startWithLogs(processBuilder, logs))
+        }
+
+        private fun startWithCageforge(
+            command: List<String>,
+            config: ProcessConfig,
+            environment: Map<String, String>,
+        ): StartedProcess {
+            val policy = checkNotNull(config.cageforge)
+            val workDir = validateProtectedWorkDir(config)
+            validateProtectedExecutable(command)
+            CageforgePlatformSetup.ensureReady()
+            val preparedIpcEndpoints =
+                policy.localIpcEndpoints.map { endpoint ->
+                    prepareProtectedIpcEndpoint(endpoint.value)
+                }
+            val preparedIpcClosed = AtomicBoolean(false)
+            val closePreparedIpc = {
+                if (preparedIpcClosed.compareAndSet(false, true)) {
+                    preparedIpcEndpoints.asReversed().forEach(AutoCloseable::close)
+                }
+            }
+            val handoffPreparedIpc = {
+                preparedIpcEndpoints.forEach(ProtectedIpcEndpointLease::handoffToChild)
+            }
+            val runtime = createCageforgeRuntime(policy, workDir, closePreparedIpc)
+            var child: CageforgeProcess? = null
+            val runtimeClosed = AtomicBoolean(false)
+            val closeRuntime = {
+                if (runtimeClosed.compareAndSet(false, true)) runtime.close()
+            }
+            val closeNativeResources = {
+                runCatching { closeRuntime() }.onFailure { error ->
+                    closePreparedIpc()
+                    throw error
+                }
+                closePreparedIpc()
+            }
+            return runCatching {
+                val process = runtime.launchProcess(buildBootstrapArgv(command, workDir))
+                child = process
+                process.onExit().whenComplete { _, _ -> runCatching { closeNativeResources() } }
+                handoffPreparedIpc()
+                ProtectedEnvironmentChannel.send(
+                    process.inputStream,
+                    process.outputStream,
+                    environment,
+                    config.startupTimeoutMs,
+                )
+                StartedProcess(process, closeNativeResources)
+            }.onFailure { error ->
+                child?.let { terminateFailedCageforgeProcess(it, error) }
+                closeNativeResources()
+            }.getOrThrow()
+        }
+
+        private fun validateProtectedWorkDir(config: ProcessConfig): File {
+            require(config.workDir.isAbsolute) {
+                "Protected process working directory must be absolute"
+            }
+            val workDir = config.workDir.canonicalFile
+            require(workDir.isDirectory) {
+                "Protected process working directory must be an existing absolute directory"
+            }
+            return workDir
+        }
+
+        private fun validateProtectedExecutable(command: List<String>) {
+            require(command.isNotEmpty()) { "Protected process argv must not be empty" }
+            command.forEachIndexed { index, argument ->
+                require('\u0000' !in argument) {
+                    "Protected process argv[$index] must not contain NUL"
+                }
+            }
+            val executable = File(command.first())
+            require(executable.isAbsolute) { "Protected process executable must be absolute" }
+            val canonicalExecutable = executable.canonicalFile
+            require(canonicalExecutable.isFile && canonicalExecutable.canExecute()) {
+                "Protected process executable is not executable: ${canonicalExecutable.path}"
+            }
+        }
+
+        private fun buildBootstrapArgv(
+            command: List<String>,
+            workDir: File,
+        ): List<String> {
+            val java = File(findJavaExecutable()).canonicalFile
+            require(java.isAbsolute && java.isFile && java.canExecute()) {
+                "Protected bootstrap requires an absolute executable Java runtime: ${java.path}"
+            }
+            val classpath =
+                (System.getProperty("boss.test.classpath") ?: System.getProperty("java.class.path"))
+                    ?.takeIf { it.isNotBlank() }
+                    ?: error("Protected launch requires the current JVM classpath")
+            return buildList {
+                add(java.path)
+                add("-cp")
+                add(classpath)
+                add(ProtectedChildBootstrap::class.java.name)
+                add("--cwd")
+                add(workDir.path)
+                add("--")
+                addAll(command)
+            }
+        }
+
+        private fun attachLogs(
+            process: Process,
+            logs: ProcessLogStreams,
+        ) {
+            var attached = false
+            try {
+                logs.attach(process)
+                attached = true
+            } finally {
+                if (!attached) {
+                    process.destroyForcibly()
+                    process.onExit().join()
+                }
             }
         }
 
@@ -178,8 +389,15 @@ class ProcessSpawner
                     return currentCommand
                 }
                 // Not a JVM launcher — fall back to JAVA_HOME or java.home system property
-                System.getenv("JAVA_HOME")?.let { return "$it/bin/java" }
-                return System.getProperty("java.home")?.let { "$it/bin/java" } ?: "java"
+                val executableName =
+                    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                        "java.exe"
+                    } else {
+                        "java"
+                    }
+                System.getenv("JAVA_HOME")?.let { return File(File(it, "bin"), executableName).path }
+                return System.getProperty("java.home")?.let { File(File(it, "bin"), executableName).path }
+                    ?: executableName
             }
         }
     }

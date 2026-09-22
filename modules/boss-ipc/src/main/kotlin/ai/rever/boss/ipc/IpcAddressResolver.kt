@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION") // Netty EventLoopGroup constructors deprecated in 4.2.x, required for UDS transport
-
 package ai.rever.boss.ipc
 
 import io.grpc.netty.NettyChannelBuilder
@@ -22,9 +20,10 @@ import java.util.concurrent.ConcurrentHashMap
  * Resolves IPC addresses for inter-process communication.
  *
  * On macOS/Linux: Uses Unix domain sockets for zero-overhead local IPC.
- * On Windows: Falls back to TCP localhost.
+ * On Windows: Uses named pipes in the local `\\.\pipe\` namespace.
  *
- * UDS path convention: $BOSS_DATA_DIR/ipc/boss-{type}-{id}.sock
+ * Unix-socket path convention: $BOSS_DATA_DIR/ipc/boss-{type}-{id}.sock.
+ * Windows named-pipe convention: `\\.\pipe\boss-{type}-{id}`.
  */
 object IpcAddressResolver {
     private val logger = LoggerFactory.getLogger(IpcAddressResolver::class.java)
@@ -32,6 +31,11 @@ object IpcAddressResolver {
     private val isWindows = System.getProperty("os.name").lowercase().contains("win")
     private val isMacOS = System.getProperty("os.name").lowercase().contains("mac")
     private val isLinux = System.getProperty("os.name").lowercase().contains("linux")
+
+    /** Existing ordinary-process Windows IPC uses authenticated loopback TCP. */
+    private const val TCP_PORT_BASE = 57000
+    private const val TCP_PORT_RANGE = 100
+    private val tcpPortCache = ConcurrentHashMap<String, Int>()
 
     /** Base directory for IPC socket files */
     private val ipcDir: File by lazy {
@@ -45,22 +49,10 @@ object IpcAddressResolver {
                     val rootDir = dirsCls.getMethod("getRootDir").invoke(dirsInst) as File
                     rootDir.absolutePath
                 } catch (_: Exception) {
-                    "${System.getProperty("user.home")}/.boss"
+                    File(System.getProperty("user.home"), ".boss").path
                 }
         File(bossDataDir, "ipc").also { it.mkdirs() }
     }
-
-    /** TCP port range for Windows fallback */
-    private const val TCP_PORT_BASE = 57000
-    private const val TCP_PORT_RANGE = 100
-
-    /**
-     * Cache of allocated TCP ports per process identity (processType:processId).
-     * Once a port is allocated for a given process, the same port is returned on
-     * subsequent calls, avoiding TOCTOU races where the port could be taken between
-     * discovery and actual bind in the server builder.
-     */
-    private val tcpPortCache = ConcurrentHashMap<String, Int>()
 
     /** Regex for valid process identifiers — prevents path traversal in socket names. */
     private val PROCESS_ID_REGEX = Regex("^[a-zA-Z0-9._-]+$")
@@ -74,7 +66,7 @@ object IpcAddressResolver {
 
     /**
      * Get the IPC address for a process.
-     * Returns a UDS path on macOS/Linux, or TCP localhost address on Windows.
+     * Returns a UDS path on macOS/Linux, or a named-pipe address on Windows.
      *
      * @throws IllegalArgumentException if processType or processId contain invalid characters.
      */
@@ -85,13 +77,28 @@ object IpcAddressResolver {
         validateProcessIdentifier(processType)
         validateProcessIdentifier(processId)
         return if (isWindows) {
-            val key = "$processType:$processId"
-            val port = tcpPortCache.computeIfAbsent(key) { findAvailableTcpPort() }
-            "tcp://localhost:$port"
+            "pipe://\\\\.\\pipe\\boss-$processType-$processId"
         } else {
             val socketFile = File(ipcDir, "boss-$processType-$processId.sock")
             "unix://${socketFile.absolutePath}"
         }
+    }
+
+    /**
+     * Resolve the endpoint for an ordinary process while preserving the legacy Windows transport.
+     * Protected Cageforge processes must use [resolveAddress] so their named pipe can be allowlisted.
+     */
+    fun resolveUnprotectedAddress(
+        processType: String,
+        processId: String,
+    ): String {
+        validateProcessIdentifier(processType)
+        validateProcessIdentifier(processId)
+        if (!isWindows) return resolveAddress(processType, processId)
+
+        val key = "$processType:$processId"
+        val port = tcpPortCache.computeIfAbsent(key) { findAvailableTcpPort() }
+        return "tcp://localhost:$port"
     }
 
     /**
@@ -112,6 +119,15 @@ object IpcAddressResolver {
             address.startsWith("unix://") -> {
                 val path = address.removePrefix("unix://")
                 DomainSocketAddress(path)
+            }
+
+            address.startsWith("pipe://") -> {
+                if (!isWindows) {
+                    throw UnsupportedOperationException(
+                        "Windows named pipes are supported only on Windows",
+                    )
+                }
+                WindowsNamedPipeAddress(address.removePrefix("pipe://"))
             }
 
             address.startsWith("tcp://") -> {
@@ -171,6 +187,15 @@ object IpcAddressResolver {
                 NettyServerBuilder.forAddress(parsed)
             }
 
+            is WindowsNamedPipeAddress -> {
+                WindowsNamedPipeTransport.prepareServer(parsed)
+                NettyServerBuilder
+                    .forAddress(parsed)
+                    .channelFactory(WindowsNamedPipeTransport.newServerChannelFactory())
+                    .bossEventLoopGroup(WindowsNamedPipeTransport.newEventLoopGroup())
+                    .workerEventLoopGroup(WindowsNamedPipeTransport.newEventLoopGroup())
+            }
+
             else -> {
                 throw IllegalArgumentException("Unknown address type: $parsed")
             }
@@ -211,6 +236,15 @@ object IpcAddressResolver {
                 NettyChannelBuilder.forAddress(parsed)
             }
 
+            is WindowsNamedPipeAddress -> {
+                NettyChannelBuilder
+                    .forAddress(parsed)
+                    .channelFactory(
+                        WindowsNamedPipeTransport.newClientChannelFactory(),
+                        WindowsNamedPipeAddress::class.java,
+                    ).eventLoopGroup(WindowsNamedPipeTransport.newEventLoopGroup())
+            }
+
             else -> {
                 throw IllegalArgumentException("Unknown address type: $parsed")
             }
@@ -221,6 +255,9 @@ object IpcAddressResolver {
      * Clean up socket file on shutdown.
      */
     fun cleanupAddress(address: String) {
+        if (address.startsWith("pipe://")) {
+            WindowsNamedPipeTransport.forgetServer(WindowsNamedPipeAddress(address.removePrefix("pipe://")))
+        }
         if (address.startsWith("unix://")) {
             val path = address.removePrefix("unix://")
             File(path).delete()

@@ -8,6 +8,7 @@ import ai.rever.boss.components.plugin.DefaultPlugin
 import ai.rever.boss.components.plugin.DependentRestartPrompt
 import ai.rever.boss.components.plugin.MissingDependencyPrompt
 import ai.rever.boss.components.plugin.MissingHandlerPluginPrompt
+import ai.rever.boss.components.plugin.PluginSandboxApprovalRequest
 import ai.rever.boss.components.plugin.PluginUninstallPrompt
 import ai.rever.boss.components.plugin.StoreVersionPrompt
 import ai.rever.boss.components.plugin.providers.SplitViewOperationsImpl
@@ -198,6 +199,10 @@ internal class BossAppState(
     // An MCP tool execution requested by an AI agent that is suspended waiting
     // for operator approval under an ASK policy.
     var pendingMcpApproval by mutableStateOf<McpApprovalRequest?>(null)
+
+    // A protected plugin is held before native spawn until the operator reviews its
+    // requested Cageforge capabilities.
+    var pendingPluginSandboxApproval by mutableStateOf<PluginSandboxApprovalRequest?>(null)
 
     // The application-menu "Microkernel Mode" checkbox requested turning the experimental mode
     // on and is waiting for the operator to confirm it (BossConsole#472). The Settings entry

@@ -2,7 +2,10 @@ package ai.rever.boss.components.plugin.remote
 
 import ai.rever.boss.components.plugin.OutOfProcessPluginSpawnerImpl
 import ai.rever.boss.components.plugin.PluginStateBridge
+import ai.rever.boss.components.plugin.SecurityRequiredPlugin
+import ai.rever.boss.components.plugin.SecurityRequirement
 import ai.rever.boss.plugin.api.PluginManifest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,8 +60,8 @@ class PluginProcessMonitor(
         java.util.concurrent.ConcurrentHashMap
             .newKeySet<String>()
 
-    /** Stored manifests and jar paths for re-spawning after crash. */
-    private val pluginSpawnInfo = java.util.concurrent.ConcurrentHashMap<String, Pair<PluginManifest, String>>()
+    /** Stored launch decisions, manifests and JAR paths for re-spawning after a crash. */
+    private val pluginSpawnInfo = java.util.concurrent.ConcurrentHashMap<String, PluginSpawnInfo>()
 
     /**
      * Start monitoring a plugin process.
@@ -71,7 +74,12 @@ class PluginProcessMonitor(
         jarPath: String? = null,
     ) {
         if (manifest != null && jarPath != null) {
-            pluginSpawnInfo[pluginId] = manifest to jarPath
+            pluginSpawnInfo[pluginId] =
+                PluginSpawnInfo(
+                    manifest = manifest,
+                    jarPath = jarPath,
+                    securityRequired = isSecurityRequired(jarPath),
+                )
         }
         val info =
             PluginHealthInfo(
@@ -127,9 +135,10 @@ class PluginProcessMonitor(
         logger.info("Restarting plugin: {}", pluginId)
 
         try {
-            val (manifest, jarPath) = spawnInfo
-            spawner.terminate(pluginId)
-            spawner.spawn(manifest, jarPath).getOrThrow()
+            val manifest = spawnInfo.manifest
+            val jarPath = spawnInfo.jarPath
+            spawner.terminate(pluginId).getOrThrow()
+            spawner.spawn(manifest, jarPath, securityRequired = spawnInfo.securityRequired).getOrThrow()
             updateState(
                 pluginId,
                 current.copy(
@@ -141,6 +150,8 @@ class PluginProcessMonitor(
                 ),
             )
             logger.info("Plugin restarted successfully: {}", pluginId)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.error("Failed to restart plugin: {}", pluginId, e)
             updateState(
@@ -158,6 +169,18 @@ class PluginProcessMonitor(
      */
     fun switchToInProcess(pluginId: String) {
         val current = _healthStates.value[pluginId] ?: return
+        val spawnInfo = pluginSpawnInfo[pluginId]
+        if (spawnInfo != null && spawnInfo.securityRequired) {
+            updateState(
+                pluginId,
+                current.copy(
+                    processState = PluginProcessState.FAILED,
+                    lastError = "Security-required plugin cannot use an in-process fallback",
+                ),
+            )
+            logger.error("Refusing in-process fallback for security-required plugin: {}", pluginId)
+            return
+        }
         inProcessFallbacks.add(pluginId)
         updateState(pluginId, current.copy(processState = PluginProcessState.IN_PROCESS_FALLBACK))
         logger.info("Plugin switched to in-process fallback: {}", pluginId)
@@ -230,4 +253,21 @@ class PluginProcessMonitor(
     ) {
         _healthStates.value = _healthStates.value + (pluginId to info)
     }
+
+    private fun isSecurityRequired(jarPath: String): Boolean =
+        SecurityRequiredPlugin
+            .readRequirement(jarPath)
+            .fold(
+                onSuccess = { it == SecurityRequirement.REQUIRED },
+                onFailure = {
+                    logger.error("Cannot validate plugin security marker; failing closed: {}", jarPath, it)
+                    true
+                },
+            )
+
+    private data class PluginSpawnInfo(
+        val manifest: PluginManifest,
+        val jarPath: String,
+        val securityRequired: Boolean,
+    )
 }

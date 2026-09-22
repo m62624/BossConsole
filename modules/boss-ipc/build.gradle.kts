@@ -59,8 +59,9 @@ dependencies {
     api(libs.protobuf.kotlin)
     api(libs.protobuf.java)
 
-    // gRPC Netty transport (supports Unix domain sockets)
+    // gRPC Netty transport for Unix sockets plus the Windows named-pipe adapter
     implementation(libs.grpc.netty)
+    implementation(libs.jna.platform)
     implementation(libs.bouncycastle.pkix)
 
     // MutableHandlerRegistry, for adding a service to an already-running server

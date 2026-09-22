@@ -14,6 +14,7 @@ class ManagedProcess(
     val config: ProcessConfig,
     val process: Process,
     val ipcAddress: String,
+    private val nativeCleanup: (() -> Unit)? = null,
 ) {
     private val _state = MutableStateFlow(ProcessState.PROCESS_STATE_STARTING)
     val state: StateFlow<ProcessState> = _state.asStateFlow()
@@ -69,5 +70,11 @@ class ManagedProcess(
         if (process.isAlive) {
             process.destroyForcibly()
         }
+    }
+
+    /** Closes native process resources after the child has terminated. */
+    fun closeNativeResources() {
+        check(!process.isAlive) { "Native process resources cannot close while the child is alive" }
+        nativeCleanup?.invoke()
     }
 }

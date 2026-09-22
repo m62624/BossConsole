@@ -9,6 +9,7 @@ import ai.rever.boss.components.dialogs.LogoutConfirmationDialog
 import ai.rever.boss.components.dialogs.McpApprovalDialog
 import ai.rever.boss.components.dialogs.NewProjectWizardDialog
 import ai.rever.boss.components.dialogs.NewTabDialog
+import ai.rever.boss.components.dialogs.PluginSandboxApprovalDialog
 import ai.rever.boss.components.dialogs.ProjectOpenModeDialog
 import ai.rever.boss.components.dialogs.ProjectSelectionDialog
 import ai.rever.boss.components.dialogs.ShortcutHelpDialog
@@ -30,6 +31,7 @@ import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.PluginHealthCenterDialog
 import ai.rever.boss.components.plugin.PluginLoadGateHost
 import ai.rever.boss.components.plugin.PluginLoadRemedyAccess
+import ai.rever.boss.components.plugin.PluginSandboxApprovalRegistry
 import ai.rever.boss.components.plugin.PluginStoreVersionBridge
 import ai.rever.boss.components.plugin.PluginUpdateAlreadyInProgressException
 import ai.rever.boss.components.plugin.PluginUpdateBridge
@@ -870,6 +872,20 @@ internal fun BossAppDialogs(state: BossAppState) {
             },
             onDeny = { reason, persistPolicy ->
                 McpToolRegistryImpl.approvalBus.deny(approvalRequest.id, reason, persistPolicy)
+            },
+        )
+    }
+
+    state.pendingPluginSandboxApproval?.let { approvalRequest ->
+        val pendingList by PluginSandboxApprovalRegistry.bus.pendingList.collectAsState()
+        PluginSandboxApprovalDialog(
+            request = approvalRequest,
+            pendingQueueSize = pendingList.size,
+            onApprove = {
+                PluginSandboxApprovalRegistry.bus.approve(approvalRequest.id)
+            },
+            onDeny = {
+                PluginSandboxApprovalRegistry.bus.deny(approvalRequest.id)
             },
         )
     }

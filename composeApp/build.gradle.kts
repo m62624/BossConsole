@@ -915,7 +915,12 @@ kotlin {
                             "**/kernel/**",
                             "**/plugin/remote/**",
                             "**/plugin/OutOfProcessPluginSpawnerImpl.kt",
+                            "**/plugin/PluginProcessSession.kt",
                             "**/plugin/PluginStateBridge.kt",
+                            "**/plugin/ProtectedPluginProcessConfig.kt",
+                            "**/plugin/ProtectedPluginIpcEndpoint.kt",
+                            "**/plugin/ProtectedPluginPolicy.kt",
+                            "**/plugin/ValidatedPluginSandboxRequest.kt",
                         )
                     }
                 }
@@ -1124,6 +1129,8 @@ kotlin {
                 "**/plugin/PluginStateDeltaTest.kt",
                 // Its process registry and production ID helper belong to the excluded OOP runtime.
                 "**/plugin/PluginProcessIdTest.kt",
+                "**/plugin/PluginProcessSessionTest.kt",
+                "**/plugin/PluginStateBridgeReadinessTest.kt",
                 // The source-isolation guard rejects this test's IPC package import.
                 "**/run/DesktopRunnerTerminalServiceTest.kt",
             )

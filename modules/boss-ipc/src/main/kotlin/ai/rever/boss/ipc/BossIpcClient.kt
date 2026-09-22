@@ -13,7 +13,8 @@ import java.util.concurrent.TimeUnit
 /**
  * gRPC client wrapper with automatic reconnection and exponential backoff.
  *
- * Supports Unix domain sockets (macOS/Linux) and TCP (Windows).
+ * Supports Unix domain sockets (macOS/Linux) and Windows named pipes.
+ * Explicit loopback TCP addresses remain available for legacy and test callers.
  *
  * Usage:
  * ```kotlin

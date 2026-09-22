@@ -10,7 +10,8 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 
 /**
- * gRPC server wrapper that supports Unix domain sockets (macOS/Linux) and TCP (Windows).
+ * gRPC server wrapper that supports Unix domain sockets (macOS/Linux) and Windows named pipes.
+ * Explicit loopback TCP addresses remain available for legacy and test callers.
  *
  * Usage:
  * ```kotlin
@@ -66,6 +67,16 @@ class BossIpcServer(
         builder.fallbackHandlerRegistry(lateServices)
         builder.intercept(ProcessIdentityInterceptor(tokenRegistry))
         server = builder.build().start()
+        if (address.startsWith("pipe://")) {
+            val pipeAddress = IpcAddressResolver.parseAddress(address) as WindowsNamedPipeAddress
+            try {
+                WindowsNamedPipeTransport.awaitServerReady(pipeAddress)
+            } catch (error: IllegalStateException) {
+                server?.shutdownNow()
+                IpcAddressResolver.cleanupAddress(address)
+                throw error
+            }
+        }
         logger.info("IPC server started on: {}", address)
         IpcAddressResolver.secureSocketFile(address)
     }

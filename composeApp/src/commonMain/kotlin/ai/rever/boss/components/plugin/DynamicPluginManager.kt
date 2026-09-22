@@ -33,6 +33,7 @@ import ai.rever.boss.services.auth.AuthStateManager
 import ai.rever.boss.utils.AppVersion
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -91,6 +92,7 @@ interface OutOfProcessPluginSpawner {
     suspend fun spawn(
         manifest: PluginManifest,
         jarPath: String,
+        securityRequired: Boolean = false,
     ): Result<Unit>
 
     /**
@@ -122,6 +124,11 @@ class DynamicPluginManager(
     private val createSandboxedContext: (pluginId: String, config: SandboxConfig) -> PluginContext,
     private val outOfProcessSpawner: OutOfProcessPluginSpawner? = null,
 ) {
+    private data class EnableOutcome(
+        val result: Result<Unit>,
+        val wasAlreadyEnabled: Boolean,
+    )
+
     private val logger = BossLogger.forComponent("DynamicPluginManager")
 
     /**
@@ -133,6 +140,9 @@ class DynamicPluginManager(
      * Mutex for plugin operations to prevent race conditions.
      */
     private val mutex = Mutex()
+
+    /** Plugin IDs whose code is intentionally never loaded into this JVM. */
+    private val securityRequiredPluginIds = ConcurrentHashMap.newKeySet<String>()
 
     /**
      * The underlying plugin loader.
@@ -930,6 +940,78 @@ class DynamicPluginManager(
                         ),
                     )
 
+                    // Read the manifest and the host-owned security marker before
+                    // the dynamic loader creates a plugin classloader. A
+                    // security-required plugin must be born inside the native
+                    // process boundary; loading it here first would defeat the
+                    // boundary even if its later child launch used Cageforge.
+                    val preflightManifest =
+                        runCatching { PluginManifestReader.readFromJar(jarPath) }
+                            .getOrElse { error ->
+                                return Result.failure(error)
+                            }
+                    val securityRequirement =
+                        SecurityRequiredPlugin.readRequirement(jarPath).getOrElse { error ->
+                            logger.error(
+                                LogCategory.SYSTEM,
+                                "Security marker preflight failed; refusing plugin load",
+                                mapOf("jarPath" to jarPath),
+                                error,
+                            )
+                            return Result.failure(error)
+                        }
+                    if (securityRequirement == SecurityRequirement.REQUIRED) {
+                        securityRequiredPluginIds += preflightManifest.pluginId
+                        if (!enabled) {
+                            val info =
+                                DynamicPluginInfo(
+                                    manifest = preflightManifest,
+                                    jarPath = jarPath,
+                                    state = PluginState.DISABLED,
+                                    loadedAt = System.currentTimeMillis(),
+                                    enabled = false,
+                                )
+                            updatePluginState(preflightManifest.pluginId, info)
+                            return Result.success(info)
+                        }
+                        val spawner =
+                            outOfProcessSpawner
+                                ?: return Result.failure(
+                                    IllegalStateException(
+                                        "Security-required plugin ${preflightManifest.pluginId} " +
+                                            "has no protected spawner",
+                                    ),
+                                )
+                        if (!canAccess(preflightManifest)) {
+                            val info =
+                                DynamicPluginInfo(
+                                    manifest = preflightManifest,
+                                    jarPath = jarPath,
+                                    state = PluginState.DISABLED,
+                                    loadedAt = System.currentTimeMillis(),
+                                    enabled = false,
+                                    errorMessage = "Plugin access denied",
+                                )
+                            updatePluginState(preflightManifest.pluginId, info)
+                            return Result.success(info)
+                        }
+                        spawner.spawn(preflightManifest, jarPath, securityRequired = true).getOrElse { error ->
+                            return Result.failure(error)
+                        }
+                        val info =
+                            DynamicPluginInfo(
+                                manifest = preflightManifest,
+                                jarPath = jarPath,
+                                state = PluginState.LOADED,
+                                loadedAt = System.currentTimeMillis(),
+                                enabled = true,
+                            )
+                        updatePluginState(preflightManifest.pluginId, info)
+                        notifyListeners { it.pluginLoaded(preflightManifest) }
+                        emitPluginLifecycle(preflightManifest.pluginId, PluginLifecycleState.LOADED)
+                        return Result.success(info)
+                    }
+
                     // Load the plugin
                     val loadResult = pluginLoader.loadPlugin(jarPath)
                     if (loadResult.isFailure) {
@@ -1209,6 +1291,10 @@ class DynamicPluginManager(
                     )
 
                     Result.success(info)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    // Cancellation is lifecycle control flow, not an install failure. Propagate it
+                    // so a protected spawn cannot be reported as a normal failed install.
+                    throw cancelled
                 } catch (e: Throwable) {
                     logger.error(
                         LogCategory.SYSTEM,
@@ -1407,6 +1493,14 @@ class DynamicPluginManager(
         waitForGC: Boolean,
         closeTabsAcrossWindows: Boolean,
     ): Result<Unit> {
+        // A security-required plugin is child-only: it deliberately has no
+        // host classloader or tracking context to unload. Terminate the native
+        // child first, then retire the manager state. Calling pluginLoader here
+        // would incorrectly manufacture an in-process ownership path.
+        if (securityRequiredPluginIds.contains(pluginId)) {
+            return uninstallSecurityRequiredPlugin(pluginId)
+        }
+
         // Close this plugin's open tabs on the UI thread FIRST, while its
         // classloader is still open, so Compose disposal resolves its
         // lazily-loaded onDispose lambdas instead of crashing against a
@@ -1586,6 +1680,44 @@ class DynamicPluginManager(
         }
     }
 
+    private suspend fun uninstallSecurityRequiredPlugin(pluginId: String): Result<Unit> =
+        mutex.withLock {
+            val manifest = getPluginInfo(pluginId)?.manifest
+            val spawner = outOfProcessSpawner
+            when {
+                manifest == null -> {
+                    Result.failure(
+                        IllegalStateException("Security-required plugin state missing: $pluginId"),
+                    )
+                }
+
+                spawner == null -> {
+                    Result.failure(
+                        IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
+                    )
+                }
+
+                else -> {
+                    // The spawner owns native termination and must receive cancellation so its
+                    // own cleanup path can run. Only state retirement is non-cancellable: once
+                    // termination has succeeded, the manager must not leave stale ownership
+                    // behind if the caller is cancelled during notification.
+                    val termination = spawner.terminate(pluginId)
+                    if (termination.isFailure) {
+                        termination
+                    } else {
+                        withContext(NonCancellable) {
+                            securityRequiredPluginIds.remove(pluginId)
+                            removePluginState(pluginId)
+                            notifyListeners { it.pluginUnloaded(manifest) }
+                            emitPluginLifecycle(pluginId, PluginLifecycleState.UNLOADED)
+                            Result.success(Unit)
+                        }
+                    }
+                }
+            }
+        }
+
     /**
      * Enable a disabled plugin.
      *
@@ -1601,73 +1733,32 @@ class DynamicPluginManager(
         reportMissingDependencies: Boolean = true,
     ): Result<Unit> {
         var wasAlreadyEnabled = false
+        val isSecurityRequired = securityRequiredPluginIds.contains(pluginId)
         val result =
             mutex.withLock {
                 try {
-                    val loadedPlugin =
-                        pluginLoader.getPlugin(pluginId)
-                            ?: return@withLock Result.failure(Exception("Plugin not found: $pluginId"))
-
-                    val trackingContext =
-                        trackingContexts[pluginId]
-                            ?: return@withLock Result.failure(Exception("No context for plugin: $pluginId"))
-
-                    // Keyed off the `enabled` flag, same as before this PR: the only case
-                    // where the flag is set while the plugin is not actually running is the
-                    // RBAC hide (state = DISABLED, `enabled` left true) - and that path must
-                    // stay silent here anyway, because the user cannot see the plugin and an
-                    // install-deps dialog is not actionable for them; handleAccessChange
-                    // reports when access actually arrives. The report below is gated on
-                    // canAccess for the same reason, so a state-based key would only unblock
-                    // a branch the gate immediately re-blocks.
-                    wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
-
-                    // Attributed for the duration of register(), so a callback the
-                    // plugin wires up and invokes synchronously from here is
-                    // attributed to it. NOT because this escapes uncaught - the
-                    // catch below turns it into Result.failure - which an earlier
-                    // version of this comment claimed and was wrong about.
-                    PluginExecutionBoundary.runAttributed(pluginId) {
-                        loadedPlugin.instance.register(trackingContext)
-                    }
-
-                    // Enable sandbox
-                    sandboxManager.enablePlugin(pluginId)
-
-                    // Clear prior crash state on successful re-enable, on BOTH axes.
-                    //
-                    // clearIncompatible alone left hasCrashed(pluginId) true, so a
-                    // plugin the user deliberately re-enabled came back still
-                    // showing PluginErrorFallback instead of its content, and they
-                    // had to find "Restart" inside that fallback. Crash recovery
-                    // made that reachable in one click: its notice tells the user to
-                    // re-enable from Toolbox, and without this the instruction does
-                    // not do what it says.
-                    //
-                    // It also un-suppresses the crash dialog for this plugin -
-                    // CrashHandler.isSuppressedByQuarantine skips prompting while the
-                    // RECOVERY quarantine is set (not hasCrashed, which a plain
-                    // contained render fault also sets and which must never silence
-                    // the dialog for a plugin that is still enabled and running).
-                    // Right for a plugin the user has already dealt with, wrong once
-                    // they have deliberately re-armed it.
-                    PluginCrashRegistry.clearIncompatible(pluginId)
-                    PluginCrashRegistry.clearCrash(pluginId)
-                    PluginRecoveryQuarantine.clear(pluginId)
-
-                    // Update state
-                    val currentInfo = _pluginStates.value[pluginId]
-                    if (currentInfo != null) {
-                        updatePluginState(
-                            pluginId,
-                            currentInfo.copy(
-                                state = PluginState.LOADED,
-                                enabled = true,
-                            ),
-                        )
-                    }
-
-                    Result.success(Unit)
+                    val outcome =
+                        if (isSecurityRequired) {
+                            val currentInfo =
+                                _pluginStates.value[pluginId]
+                                    ?: return@withLock Result.failure(
+                                        Exception("Security-required plugin not found: $pluginId"),
+                                    )
+                            val alreadyEnabled = currentInfo.state == PluginState.LOADED && currentInfo.enabled
+                            val enableResult =
+                                if (alreadyEnabled) {
+                                    Result.success(Unit)
+                                } else {
+                                    enableSecurityRequiredPlugin(currentInfo)
+                                }
+                            EnableOutcome(enableResult, alreadyEnabled)
+                        } else {
+                            enableInProcessPlugin(pluginId)
+                        }
+                    wasAlreadyEnabled = outcome.wasAlreadyEnabled
+                    outcome.result
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
                 } catch (e: Throwable) {
                     logger.error(
                         LogCategory.SYSTEM,
@@ -1690,7 +1781,7 @@ class DynamicPluginManager(
         // Outside the mutex, same as installPlugin. Skipped when the plugin
         // was already enabled: a redundant enable must not discard an open
         // panel's in-memory state (resetComponent loses it by design).
-        if (result.isSuccess && !wasAlreadyEnabled) notifyPanelsRefresh(pluginId)
+        if (result.isSuccess && !wasAlreadyEnabled && !isSecurityRequired) notifyPanelsRefresh(pluginId)
         val activatedManifest = _pluginStates.value[pluginId]?.manifest
         if (activatedManifest != null &&
             shouldReportPluginReenable(
@@ -1703,6 +1794,129 @@ class DynamicPluginManager(
             notifyPluginActivated(activatedManifest)
         }
         return result
+    }
+
+    private suspend fun enableInProcessPlugin(pluginId: String): EnableOutcome {
+        val loadedPlugin = pluginLoader.getPlugin(pluginId)
+        val trackingContext = trackingContexts[pluginId]
+        val wasAlreadyEnabled = _pluginStates.value[pluginId]?.enabled == true
+
+        return when {
+            loadedPlugin == null -> {
+                EnableOutcome(Result.failure(Exception("Plugin not found: $pluginId")), false)
+            }
+
+            trackingContext == null -> {
+                EnableOutcome(Result.failure(Exception("No context for plugin: $pluginId")), false)
+            }
+
+            else -> {
+                // Attributed for the duration of register(), so a callback the plugin wires up and
+                // invokes synchronously from here is attributed to it. The outer boundary converts
+                // ordinary registration failures into the existing Result contract.
+                PluginExecutionBoundary.runAttributed(pluginId) {
+                    loadedPlugin.instance.register(trackingContext)
+                }
+                sandboxManager.enablePlugin(pluginId)
+                clearPluginHealth(pluginId)
+
+                _pluginStates.value[pluginId]?.let { currentInfo ->
+                    updatePluginState(
+                        pluginId,
+                        currentInfo.copy(
+                            state = PluginState.LOADED,
+                            enabled = true,
+                        ),
+                    )
+                }
+                EnableOutcome(Result.success(Unit), wasAlreadyEnabled)
+            }
+        }
+    }
+
+    /**
+     * Enable a protected plugin without ever resolving its code through the host loader.
+     *
+     * The marker is read again at the lifecycle boundary because the JAR can be replaced
+     * while the plugin is disabled. A changed or unreadable marker fails closed rather than
+     * turning an existing protected state into an ordinary in-process load.
+     */
+    private suspend fun enableSecurityRequiredPlugin(info: DynamicPluginInfo): Result<Unit> {
+        val pluginId = info.manifest.pluginId
+        val marker = SecurityRequiredPlugin.readRequirement(info.jarPath)
+        val validationError =
+            when {
+                marker.isFailure -> {
+                    marker.exceptionOrNull()
+                }
+
+                marker.getOrNull() != SecurityRequirement.REQUIRED -> {
+                    IllegalStateException("Security-required marker missing for protected plugin $pluginId")
+                }
+
+                !canAccess(info.manifest) -> {
+                    IllegalStateException("Plugin access denied: $pluginId")
+                }
+
+                outOfProcessSpawner == null -> {
+                    IllegalStateException("Security-required plugin $pluginId has no protected spawner")
+                }
+
+                else -> {
+                    null
+                }
+            }
+        if (validationError != null) return failProtectedEnable(info, validationError)
+
+        val spawn = checkNotNull(outOfProcessSpawner).spawn(info.manifest, info.jarPath, securityRequired = true)
+        return if (spawn.isFailure) {
+            failProtectedEnable(info, spawn.exceptionOrNull() ?: Exception("Protected spawn failed"))
+        } else {
+            clearPluginHealth(pluginId)
+            updatePluginState(
+                pluginId,
+                info.copy(
+                    state = PluginState.LOADED,
+                    enabled = true,
+                    errorMessage = null,
+                ),
+            )
+            Result.success(Unit)
+        }
+    }
+
+    private fun failProtectedEnable(
+        info: DynamicPluginInfo,
+        error: Throwable,
+    ): Result<Unit> {
+        updatePluginState(
+            info.manifest.pluginId,
+            info.copy(
+                state = PluginState.DISABLED,
+                enabled = false,
+                errorMessage = error.message,
+            ),
+        )
+        return Result.failure(error)
+    }
+
+    private fun clearPluginHealth(pluginId: String) {
+        // Clear prior crash state on successful re-enable, on BOTH axes.
+        //
+        // clearIncompatible alone left hasCrashed(pluginId) true, so a plugin the user deliberately
+        // re-enabled came back still showing PluginErrorFallback instead of its content, and they
+        // had to find "Restart" inside that fallback. Crash recovery made that reachable in one
+        // click: its notice tells the user to re-enable from Toolbox, and without this the
+        // instruction does not do what it says.
+        //
+        // It also un-suppresses the crash dialog for this plugin - CrashHandler's
+        // isSuppressedByQuarantine skips prompting while the RECOVERY quarantine is set (not
+        // hasCrashed, which a plain contained render fault also sets and which must never silence
+        // the dialog for a plugin that is still enabled and running). Right for a plugin the user
+        // has already dealt with, wrong once they have deliberately re-armed it.
+        PluginCrashRegistry.clearIncompatible(pluginId)
+        PluginCrashRegistry.clearCrash(pluginId)
+        PluginRecoveryQuarantine.clear(pluginId)
     }
 
     /**
@@ -1869,19 +2083,21 @@ class DynamicPluginManager(
     suspend fun disablePlugin(pluginId: String): Result<Unit> {
         return mutex.withLock {
             try {
-                val trackingContext =
-                    trackingContexts[pluginId]
-                        ?: return@withLock Result.failure(Exception("No context for plugin: $pluginId"))
-
-                // Unregister all panels and tabs
-                trackingContext.unregisterAll()
-
-                // Disable sandbox
-                sandboxManager.disablePlugin(pluginId)
-
-                // Update state
-                val currentInfo = _pluginStates.value[pluginId]
-                if (currentInfo != null) {
+                if (securityRequiredPluginIds.contains(pluginId)) {
+                    val currentInfo =
+                        _pluginStates.value[pluginId]
+                            ?: return@withLock Result.failure(
+                                Exception("Security-required plugin not found: $pluginId"),
+                            )
+                    val spawner =
+                        outOfProcessSpawner
+                            ?: return@withLock Result.failure(
+                                IllegalStateException("Security-required plugin $pluginId has no protected spawner"),
+                            )
+                    val termination = spawner.terminate(pluginId)
+                    if (termination.isFailure) {
+                        return@withLock termination
+                    }
                     updatePluginState(
                         pluginId,
                         currentInfo.copy(
@@ -1889,9 +2105,34 @@ class DynamicPluginManager(
                             enabled = false,
                         ),
                     )
-                }
+                    Result.success(Unit)
+                } else {
+                    val trackingContext =
+                        trackingContexts[pluginId]
+                            ?: return@withLock Result.failure(Exception("No context for plugin: $pluginId"))
 
-                Result.success(Unit)
+                    // Unregister all panels and tabs
+                    trackingContext.unregisterAll()
+
+                    // Disable sandbox
+                    sandboxManager.disablePlugin(pluginId)
+
+                    // Update state
+                    val currentInfo = _pluginStates.value[pluginId]
+                    if (currentInfo != null) {
+                        updatePluginState(
+                            pluginId,
+                            currentInfo.copy(
+                                state = PluginState.DISABLED,
+                                enabled = false,
+                            ),
+                        )
+                    }
+
+                    Result.success(Unit)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 logger.error(
                     LogCategory.SYSTEM,
@@ -2167,6 +2408,8 @@ class DynamicPluginManager(
                         ),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logger.error(
                     LogCategory.SYSTEM,
@@ -2275,6 +2518,8 @@ class DynamicPluginManager(
                         ),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logger.error(
                     LogCategory.SYSTEM,
@@ -2456,33 +2701,60 @@ class DynamicPluginManager(
                     info.enabled && !hiddenPlugins.containsKey(pluginId) && !canAccess(info.manifest)
                 }
             for ((pluginId, info) in nowHidden) {
-                val trackingContext = trackingContexts[pluginId]
-                if (trackingContext != null) {
-                    trackingContext.unregisterAll()
-                    hiddenPlugins[pluginId] = info
-                    updatePluginState(pluginId, info.copy(state = PluginState.DISABLED))
-                    val missing = missingPermissions(info.manifest)
-                    logger.info(
-                        LogCategory.SYSTEM,
-                        "Hid plugin after access lost",
-                        mapOf(
-                            "pluginId" to pluginId,
-                            "missingPermissions" to missing.joinToString(","),
-                            "hint" to
-                                if (missing.isNotEmpty()) {
-                                    "Ask an admin to grant: ${missing.joinToString(", ")}"
-                                } else {
-                                    "Requires admin"
-                                },
-                        ),
-                    )
-                }
+                hidePluginAfterAccessRevoked(pluginId, info)
             }
         }
         // Startup/login reconciliation is silent. Later grants for the same user report
         // the successfully registered manifests, outside the lock and off the UI thread.
         if (reportMissingDependencies) {
             for (manifest in reactivated) notifyPluginActivated(manifest)
+        }
+    }
+
+    private suspend fun hidePluginAfterAccessRevoked(
+        pluginId: String,
+        info: DynamicPluginInfo,
+    ) {
+        if (securityRequiredPluginIds.contains(pluginId)) {
+            val termination = outOfProcessSpawner?.terminate(pluginId)
+            if (termination?.isSuccess == true) {
+                updatePluginState(
+                    pluginId,
+                    info.copy(
+                        state = PluginState.DISABLED,
+                        enabled = false,
+                    ),
+                )
+            } else {
+                logger.error(
+                    LogCategory.SYSTEM,
+                    "Failed to terminate protected plugin after access was revoked",
+                    mapOf("pluginId" to pluginId),
+                    termination?.exceptionOrNull()
+                        ?: IllegalStateException("No protected spawner available"),
+                )
+            }
+        } else {
+            trackingContexts[pluginId]?.let { trackingContext ->
+                trackingContext.unregisterAll()
+                hiddenPlugins[pluginId] = info
+                updatePluginState(pluginId, info.copy(state = PluginState.DISABLED))
+                val missing = missingPermissions(info.manifest)
+                logger.info(
+                    LogCategory.SYSTEM,
+                    "Hid plugin after access lost",
+                    mapOf(
+                        "pluginId" to pluginId,
+                        "missingPermissions" to missing.joinToString(","),
+                        "hint" to
+                            if (missing.isNotEmpty()) {
+                                "Ask an admin to grant: ${missing.joinToString(", ")}"
+                            } else {
+                                "Requires admin"
+                            },
+                    ),
+                )
+            }
         }
     }
 

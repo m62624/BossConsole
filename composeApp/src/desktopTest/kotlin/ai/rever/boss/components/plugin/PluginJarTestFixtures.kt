@@ -27,8 +27,10 @@ internal object PluginJarTestFixtures {
         fileName: String,
         pluginId: String,
         version: String,
+        securityRequired: Boolean = false,
     ): File {
         val jar = File(dir, fileName)
+        val securityMarker = if (securityRequired) ",\n  \"securityRequired\": true" else ""
         ZipOutputStream(jar.outputStream()).use { zip ->
             zip.putNextEntry(ZipEntry("META-INF/boss-plugin/plugin.json"))
             zip.write(
@@ -39,7 +41,7 @@ internal object PluginJarTestFixtures {
                   "displayName": "Test Plugin",
                   "version": "$version",
                   "apiVersion": "1.0.0",
-                  "mainClass": "com.example.TestPlugin"
+                  "mainClass": "com.example.TestPlugin"$securityMarker
                 }
                 """.trimIndent().toByteArray(),
             )
