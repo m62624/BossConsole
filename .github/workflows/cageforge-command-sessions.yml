@@ -48,15 +48,23 @@ jobs:
       - name: Stage self-contained consumer
         run: |
           set -euo pipefail
-          stage=$(mktemp -d "$RUNNER_TEMP/boss-command-runtime.XXXXXX")
+          runner_temp="$RUNNER_TEMP"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_temp=$(cygpath -u "$runner_temp")
+          fi
+          stage=$(mktemp -d "$runner_temp/boss-command-runtime.XXXXXX")
           tar -xzf modules/boss-command-sandbox/build/nativeSecurityTest/boss-command-sandbox-tests.tar.gz -C "$stage"
           separator=:
+          classes="$stage/classes"
           if [[ "$RUNNER_OS" == Windows ]]; then
-            stage=$(cygpath -m "$stage")
+            classes=$(cygpath -m "$classes")
             separator=';'
           fi
-          classpath="$stage/classes"
+          classpath="$classes"
           while IFS= read -r -d '' jar; do
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              jar=$(cygpath -m "$jar")
+            fi
             classpath="$classpath$separator$jar"
           done < <(find "$stage/lib" -maxdepth 1 -type f -name '*.jar' -print0 | sort -z)
           echo "BOSS_NATIVE_CP=$classpath" >> "$GITHUB_ENV"
