@@ -1,0 +1,139 @@
+name: Cageforge command sessions
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'modules/boss-command-sandbox/**'
+      - 'composeApp/**'
+      - 'ci/cageforge-command-suite/**'
+      - 'ci/run-cageforge-command-linux-vm.sh'
+      - '.github/workflows/cageforge-command-sessions.yml'
+      - 'gradle/libs.versions.toml'
+      - 'settings.gradle.kts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cageforge-command-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native-desktop:
+    name: Command sessions on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      BOSS_CAGEFORGE_SETUP_MARKER: ${{ runner.temp }}/boss-command-setup-owned
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Build and check session module
+        run: ./gradlew :boss-command-sandbox:check :boss-command-sandbox:nativeSecurityTestBundle --no-daemon --max-workers=2 --console=plain
+      - name: Stage self-contained consumer
+        run: |
+          set -euo pipefail
+          stage=$(mktemp -d "$RUNNER_TEMP/boss-command-runtime.XXXXXX")
+          tar -xzf modules/boss-command-sandbox/build/nativeSecurityTest/boss-command-sandbox-tests.tar.gz -C "$stage"
+          separator=:
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            stage=$(cygpath -m "$stage")
+            separator=';'
+          fi
+          classpath="$stage/classes"
+          while IFS= read -r -d '' jar; do
+            classpath="$classpath$separator$jar"
+          done < <(find "$stage/lib" -maxdepth 1 -type f -name '*.jar' -print0 | sort -z)
+          echo "BOSS_NATIVE_CP=$classpath" >> "$GITHUB_ENV"
+      - name: Explicit Windows setup
+        if: runner.os == 'Windows'
+        run: java -cp "$BOSS_NATIVE_CP" ai.rever.boss.sandbox.CommandWindowsSetup install
+      - name: Native root and descendant enforcement
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          java -cp "$BOSS_NATIVE_CP" org.junit.runner.JUnitCore ai.rever.boss.sandbox.CommandNativeSecurityTest \
+            2>&1 | tee "$RUNNER_TEMP/boss-command-native.log"
+      - name: Remove owned Windows setup
+        if: always() && runner.os == 'Windows'
+        run: |
+          if [[ -f "$BOSS_CAGEFORGE_SETUP_MARKER" ]]; then
+            java -cp "$BOSS_NATIVE_CP" ai.rever.boss.sandbox.CommandWindowsSetup uninstall
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: command-session-results-${{ matrix.os }}
+          path: |
+            modules/boss-command-sandbox/build/test-results/
+            ${{ runner.temp }}/boss-command-native.log
+
+  linux-qemu:
+    name: Command descendants in prepared Linux QEMU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CAGEFORGE_VM_IMAGE_SHA256: 6e40c07ae715f744f84af0bec76415cc1987dd115b4b8de437818561f01a3733
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Compile libraries and consumer on the host
+        run: ./gradlew :boss-command-sandbox:check :boss-command-sandbox:nativeSecurityTestBundle --no-daemon --max-workers=2 --console=plain
+      - name: Install VM tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes genisoimage qemu-system-x86 qemu-utils
+          test -c /dev/kvm
+          sudo chmod 0666 /dev/kvm
+      - uses: actions/cache@v4
+        id: image
+        with:
+          path: ${{ runner.temp }}/noble-server-cloudimg-amd64.img
+          key: boss-cageforge-noble-${{ env.CAGEFORGE_VM_IMAGE_SHA256 }}
+      - name: Download pinned guest
+        if: steps.image.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --silent --show-error --location --retry 3 --max-filesize 1073741824 --max-time 900 \
+            https://cloud-images.ubuntu.com/noble/20260814/noble-server-cloudimg-amd64.img \
+            --output "$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
+      - name: Verify guest image and execute prebuilt consumer
+        env:
+          CAGEFORGE_VM_ARTIFACTS: ${{ runner.temp }}/boss-command-vm-logs
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/noble-server-cloudimg-amd64.img"
+          printf '%s  %s\n' "$CAGEFORGE_VM_IMAGE_SHA256" "$image" | sha256sum --check --status
+          bash ci/run-cageforge-command-linux-vm.sh --image "$image" \
+            --test-bundle "$GITHUB_WORKSPACE/modules/boss-command-sandbox/build/nativeSecurityTest/boss-command-sandbox-tests.tar.gz" \
+            2>&1 | tee "$RUNNER_TEMP/boss-command-native.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: command-session-results-linux
+          path: |
+            modules/boss-command-sandbox/build/test-results/
+            ${{ runner.temp }}/boss-command-native.log
+            ${{ runner.temp }}/boss-command-vm-logs/
