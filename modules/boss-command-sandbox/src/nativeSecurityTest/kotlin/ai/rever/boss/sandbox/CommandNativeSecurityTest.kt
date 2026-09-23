@@ -40,11 +40,19 @@ class CommandNativeSecurityTest {
         Files.createDirectory(project.resolve(".git"))
         val outside = temporary.newFolder("private").toPath()
         Files.writeString(outside.resolve("secret"), "host-secret")
+        val approvedFile = Files.writeString(outside.resolve("approved"), "approved-input")
         assertEquals("host-secret", Files.readString(outside.resolve("secret")))
         ServerSocket(0, 4, InetAddress.getByName("127.0.0.1")).use { server ->
             Socket("127.0.0.1", server.localPort).use { server.accept().close() }
-            val arguments = listOf("root", project.toString(), outside.toString(), server.localPort.toString())
-            val command = command(project, arguments)
+            val arguments =
+                listOf(
+                    "root",
+                    project.toString(),
+                    outside.toString(),
+                    server.localPort.toString(),
+                    approvedFile.toString(),
+                )
+            val command = command(project, arguments, listOf(approvedFile))
             CommandNativeTestRunner.stage("preparing root policy")
             val plan = launcher.prepare(command)
             // A disk edit cannot replace the already reviewed command/policy snapshot.
@@ -70,6 +78,7 @@ class CommandNativeSecurityTest {
         assertTrue(Files.exists(project.resolve("descendant-allowed")))
         assertFalse(Files.exists(outside.resolve("root-escape")))
         assertFalse(Files.exists(outside.resolve("descendant-escape")))
+        assertEquals("approved-input", Files.readString(approvedFile))
     }
 
     @Test(timeout = 90000)
@@ -106,9 +115,10 @@ class CommandNativeSecurityTest {
     private fun command(
         project: Path,
         arguments: List<String>,
+        additionalReadPaths: List<Path> = emptyList(),
     ): SandboxCommand {
         val classpathRoots = probeClasspath.split(File.pathSeparator).map { Path.of(it).toRealPath() }
-        val roots = (classpathRoots + listOf(javaHome)).distinct()
+        val roots = (classpathRoots + listOf(javaHome) + additionalReadPaths).distinct()
         val rules = roots.joinToString(",\n") { "{ target = \"absolute\", path = ${quote(it)}, access = \"read\" }" }
         // Platform overlays are validated using their target's path syntax, even on another OS.
         val macosRuntime =

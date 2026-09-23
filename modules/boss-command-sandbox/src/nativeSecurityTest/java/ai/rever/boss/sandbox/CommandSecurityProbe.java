@@ -36,6 +36,16 @@ public final class CommandSecurityProbe {
             throw new AssertionError("Wrong session working directory");
         }
         Files.writeString(project.resolve(mode + "-allowed"), "allowed");
+        Path approvedFile = Path.of(args[4]);
+        if (!"approved-input".equals(Files.readString(approvedFile))) {
+            throw new AssertionError("Explicit file read grant did not work: " + mode);
+        }
+        try {
+            Files.writeString(approvedFile, "overwritten");
+            throw new AssertionError("Explicit read-only file grant allowed a write: " + mode);
+        } catch (IOException expected) {
+            // The explicit file grant must not grant write access or access to its siblings.
+        }
         try {
             Files.readString(outside.resolve("secret"));
             throw new AssertionError("Read escaped the project policy: " + mode);
