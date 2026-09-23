@@ -166,8 +166,8 @@ class CommandNativeSecurityTest {
                         emptyList(),
                         "Read the explicitly approved input file",
                     ).use { escalation ->
-                        assertTrue(escalation.filesystem.contains("read" to approvedFile.toString()))
-                        assertTrue(escalation.json.contains(approvedFile.toString()))
+                        assertEquals(listOf("read" to approvedFile.toString()), escalation.filesystem)
+                        assertTrue(escalation.network.isEmpty())
                         val escalationGrant = PermissionApprover().approveEscalation(escalation)
                         val argv =
                             listOf(
