@@ -138,13 +138,13 @@ class CommandNativeSecurityTest {
         val command = command(project, listOf("baseline", approvedFile.toString()))
         val toml = escalationPolicy(command, project)
         val context = RuntimeContext(project)
+        Cageforge.checkToml(toml, "escalation-test", context)
         val baseRequest =
             Cageforge.permissionRequest(
                 toml,
                 "escalation-test",
                 context,
                 toolId = "boss-command-session",
-                configDigest = "native-escalation-test",
             )
         val baseGrant = PermissionApprover().approve(baseRequest)
 
