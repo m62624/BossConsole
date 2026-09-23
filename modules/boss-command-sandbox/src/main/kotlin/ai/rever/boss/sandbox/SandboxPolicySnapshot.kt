@@ -72,7 +72,9 @@ internal class SandboxPolicySnapshot private constructor(
                 appendLine("[profiles.$LAUNCH_PROFILE]")
                 appendLine("inherits = [${tomlString(profile)}]")
                 appendLine("[profiles.$LAUNCH_PROFILE.approval]")
-                appendLine("mode = \"preflight\"")
+                // The first launch still gets an explicit host approval, while future
+                // MCP permission requests use Cageforge's on-demand escalation API.
+                appendLine("mode = \"preflight-and-on-demand\"")
                 appendLine("persistence = \"session\"")
                 appendLine("[profiles.$LAUNCH_PROFILE.command]")
                 appendLine("program = ${tomlString(argv.first())}")

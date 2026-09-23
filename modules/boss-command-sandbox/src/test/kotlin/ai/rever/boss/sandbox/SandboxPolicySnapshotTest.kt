@@ -36,6 +36,15 @@ class SandboxPolicySnapshotTest {
     }
 
     @Test
+    fun `host profile permits Cageforge escalation without changing the selected profile`() {
+        val snapshot = SandboxPolicySnapshot.read(command())
+        assertTrue(snapshot.toml.contains("[profiles.${SandboxPolicySnapshot.LAUNCH_PROFILE}.approval]"))
+        assertTrue(snapshot.toml.contains("mode = \"preflight-and-on-demand\""))
+        assertTrue(snapshot.toml.contains("inherits = [\"node\"]"))
+        assertTrue(snapshot.toml.contains("[profiles.node]"))
+    }
+
+    @Test
     fun `approval identifies arguments and project as well as policy`() {
         val command = command()
         val original = SandboxPolicySnapshot.read(command)

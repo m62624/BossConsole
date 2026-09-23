@@ -16,8 +16,11 @@ Edits to the TOML file affect the next preparation, never a running session. A p
 can launch once. A failed launch has no unsandboxed retry or fallback.
 
 The final child profile `boss-command-session` is reserved. It enforces preflight
-approval and captured stdin/stdout/stderr. It inherits the selected policy; native
-Cageforge resolves all filesystem, environment, network and OS-specific rules.
+approval for the initial launch and selects Cageforge's mode required for
+on-demand escalation. It also captures stdin/stdout/stderr. It inherits the
+selected policy; native Cageforge resolves all filesystem, environment, network
+and OS-specific rules. The BOSS MCP request and GUI approval loop is still
+integration work, described below.
 The project directory is the resolution context even when the TOML file is elsewhere.
 There is no automatic discovery or execution of repository-provided commands.
 
