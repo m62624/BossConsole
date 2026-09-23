@@ -60,6 +60,11 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then
             classes=$(cygpath -m "$classes")
             separator=';'
+            # ACL restoration happens during uninstall, after JUnit has finished.
+            # Keep fixtures in the disposable stage until runner cleanup, not in
+            # TemporaryFolder's per-test deletion lifecycle.
+            mkdir "$stage/native-fixtures"
+            echo "BOSS_NATIVE_FIXTURE_ROOT=$(cygpath -m "$stage/native-fixtures")" >> "$GITHUB_ENV"
           fi
           classpath="$classes"
           while IFS= read -r -d '' jar; do

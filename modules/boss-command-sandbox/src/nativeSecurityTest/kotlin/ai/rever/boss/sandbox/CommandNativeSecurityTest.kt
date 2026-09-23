@@ -19,7 +19,14 @@ import kotlin.test.assertTrue
 
 class CommandNativeSecurityTest {
     @get:Rule
-    val temporary = TemporaryFolder()
+    val temporary =
+        object : TemporaryFolder(windowsFixtureParent()) {
+            override fun after() {
+                // Windows keeps an ACL journal until explicit uninstall. CI retains
+                // these files in its disposable staging directory until then.
+                if (File.separatorChar != '\\') super.after()
+            }
+        }
 
     private val launcher = CageforgeSessionLauncher()
     private val javaHome = Path.of(System.getProperty("java.home")).toRealPath()
@@ -74,8 +81,8 @@ class CommandNativeSecurityTest {
                 }
             }
         }
-        assertTrue(Files.exists(project.resolve("root-allowed")))
-        assertTrue(Files.exists(project.resolve("descendant-allowed")))
+        assertEquals("allowed", Files.readString(project.resolve("root-allowed")))
+        assertEquals("allowed", Files.readString(project.resolve("descendant-allowed")))
         assertFalse(Files.exists(outside.resolve("root-escape")))
         assertFalse(Files.exists(outside.resolve("descendant-escape")))
         assertEquals("approved-input", Files.readString(approvedFile))
@@ -160,4 +167,13 @@ class CommandNativeSecurityTest {
     }
 
     private fun quote(path: Path): String = "\"${path.toString().replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
+    private fun windowsFixtureParent(): File? {
+        if (File.separatorChar != '\\') return null
+        val path =
+            checkNotNull(System.getenv("BOSS_NATIVE_FIXTURE_ROOT")) {
+                "Windows native tests require BOSS_NATIVE_FIXTURE_ROOT retained until WindowsSetup.uninstall()"
+            }
+        return File(path).also { check(it.isAbsolute && it.isDirectory) { "Invalid native fixture directory: $path" } }
+    }
 }

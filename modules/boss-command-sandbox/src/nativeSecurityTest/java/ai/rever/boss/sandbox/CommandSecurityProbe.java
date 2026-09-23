@@ -32,10 +32,10 @@ public final class CommandSecurityProbe {
         if (!"child".equals(System.getenv("BOSS_SANDBOX_VALUE"))) {
             throw new AssertionError("Inherited TOML environment was not overridden");
         }
-        if (!Path.of("").toRealPath().equals(project.toRealPath())) {
-            throw new AssertionError("Wrong session working directory");
-        }
-        Files.writeString(project.resolve(mode + "-allowed"), "allowed");
+        // Use the actual cwd. Windows toRealPath enumerates ancestors that the
+        // sandbox is deliberately not allowed to list. The host checks that both
+        // relative writes landed in the selected project, not somewhere else.
+        Files.writeString(Path.of(mode + "-allowed"), "allowed", StandardOpenOption.CREATE_NEW);
         Path approvedFile = Path.of(args[4]);
         if (!"approved-input".equals(Files.readString(approvedFile))) {
             throw new AssertionError("Explicit file read grant did not work: " + mode);
