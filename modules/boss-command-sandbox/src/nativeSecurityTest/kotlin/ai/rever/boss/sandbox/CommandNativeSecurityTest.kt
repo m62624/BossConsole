@@ -1,7 +1,11 @@
 package ai.rever.boss.sandbox
 
 import ai.cageforge.CageforgeConfigurationException
+import ai.cageforge.WindowsSetup
+import ai.cageforge.WindowsSetupState
 import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -19,18 +23,25 @@ import kotlin.test.assertTrue
 
 class CommandNativeSecurityTest {
     @get:Rule
-    val temporary =
-        object : TemporaryFolder(windowsFixtureParent()) {
-            override fun after() {
-                // Windows keeps an ACL journal until explicit uninstall. CI retains
-                // these files in its disposable staging directory until then.
-                if (File.separatorChar != '\\') super.after()
-            }
-        }
+    val temporary = TemporaryFolder()
 
     private val launcher = CageforgeSessionLauncher()
     private val javaHome = Path.of(System.getProperty("java.home")).toRealPath()
     private val executable = javaHome.resolve("bin/" + if (File.separatorChar == '\\') "java.exe" else "java")
+
+    @Before
+    fun ensureWindowsSetup() {
+        if (WindowsSetup.isSupported() && WindowsSetup.status() == WindowsSetupState.MISSING) {
+            WindowsSetup.install()
+        }
+    }
+
+    @After
+    fun restoreWindowsSetupBeforeTemporaryCleanup() {
+        if (WindowsSetup.isSupported() && WindowsSetup.status() == WindowsSetupState.READY) {
+            WindowsSetup.uninstall()
+        }
+    }
 
     // The pure-Java child needs only its classes, not the host's JUnit/Kotlin/JNI jars.
     private val probeClasspath =
@@ -62,6 +73,10 @@ class CommandNativeSecurityTest {
             val command = command(project, arguments, listOf(approvedFile))
             CommandNativeTestRunner.stage("preparing root policy")
             val plan = launcher.prepare(command)
+            assertFalse(
+                plan.permissionsJson.contains(outside.resolve("secret").toString()),
+                "The host permission request must not grant the denied secret: ${plan.permissionsJson}",
+            )
             // A disk edit cannot replace the already reviewed command/policy snapshot.
             Files.writeString(command.policyFile, "malformed replacement")
             runBlocking {
@@ -125,7 +140,23 @@ class CommandNativeSecurityTest {
         additionalReadPaths: List<Path> = emptyList(),
     ): SandboxCommand {
         val classpathRoots = probeClasspath.split(File.pathSeparator).map { Path.of(it).toRealPath() }
-        val roots = (classpathRoots + listOf(javaHome) + additionalReadPaths).distinct()
+        val runtimeRoots =
+            if (File.separatorChar == '\\') {
+                val bin = javaHome.resolve("bin")
+                val binLibraries =
+                    Files.list(bin).use { paths ->
+                        paths.filter { it.fileName.toString().endsWith(".dll", ignoreCase = true) }.toList()
+                    }
+                binLibraries +
+                    listOf(
+                        bin.resolve("server/jvm.dll"),
+                        javaHome.resolve("lib/jvm.cfg"),
+                        javaHome.resolve("lib/modules"),
+                    ).filter(Files::isRegularFile)
+            } else {
+                listOf(javaHome)
+            }
+        val roots = (classpathRoots + runtimeRoots + additionalReadPaths).distinct()
         val rules = roots.joinToString(",\n") { "{ target = \"absolute\", path = ${quote(it)}, access = \"read\" }" }
         // Platform overlays are validated using their target's path syntax, even on another OS.
         val macosRuntime =
@@ -167,13 +198,4 @@ class CommandNativeSecurityTest {
     }
 
     private fun quote(path: Path): String = "\"${path.toString().replace("\\", "\\\\").replace("\"", "\\\"")}\""
-
-    private fun windowsFixtureParent(): File? {
-        if (File.separatorChar != '\\') return null
-        val path =
-            checkNotNull(System.getenv("BOSS_NATIVE_FIXTURE_ROOT")) {
-                "Windows native tests require BOSS_NATIVE_FIXTURE_ROOT retained until WindowsSetup.uninstall()"
-            }
-        return File(path).also { check(it.isAbsolute && it.isDirectory) { "Invalid native fixture directory: $path" } }
-    }
 }

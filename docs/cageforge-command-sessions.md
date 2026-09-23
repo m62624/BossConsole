@@ -88,13 +88,13 @@ the published binding and real backend on Linux, macOS and Windows. Linux enforc
 runs in a prepared QEMU guest with the consumer compiled on the host. GUI tests must
 exercise opt-in, review, denial, failure, output and termination through Compose.
 
-On Windows, native tests require `BOSS_NATIVE_FIXTURE_ROOT` to name an existing
-absolute directory in disposable test storage. Fixtures stay there after JUnit
-finishes: Cageforge restores journaled ACLs during explicit `WindowsSetup.uninstall`,
-not when a child exits. Do not delete those files before uninstall succeeds. CI
-retains them in its staging directory until the runner is disposed. The cwd probe
-writes relative paths and the host verifies their contents in the selected project;
-it does not use `toRealPath`, which enumerates ungranted Windows ancestor directories.
+On Windows, each native test restores the explicitly installed `WindowsSetup`
+before JUnit removes that test's temporary files, because Cageforge restores
+journaled ACLs during uninstall. The Java probe grants only its classes and the
+runtime files it opens; it does not recursively grant the entire JDK. The cwd
+probe writes relative paths and the host verifies their contents in the selected
+project; it does not use `toRealPath`, which enumerates ungranted Windows ancestor
+directories.
 
 The existing `feat/cageforge-secure-plugin` branch supplies useful native provisioning
 and QEMU patterns, but its protected plugin lifecycle is not this feature's launch
