@@ -2,7 +2,9 @@ package ai.rever.boss.platform
 
 import ai.rever.boss.sandbox.SandboxCommandHost
 import ai.rever.boss.sandbox.SandboxConsentDialog
+import ai.rever.boss.sandbox.SandboxDisabledDialog
 import ai.rever.boss.sandbox.SandboxManagerDialog
+import ai.rever.boss.sandbox.SandboxSubsystem
 import ai.rever.boss.sandbox.SandboxWindowModel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,16 +22,41 @@ internal actual fun SandboxSessionDialogs(
     onDismiss: () -> Unit,
 ) {
     val host = SandboxCommandHost
-    val service = host.service
     val scope = rememberCoroutineScope()
-    val sessions by service.sessions.collectAsState()
-    val requests by service.consent.requests.collectAsState()
-    val reviewWindow by host.reviewWindow.collectAsState()
-    val model = remember(projectDirectory) { SandboxWindowModel(projectDirectory) }
+    val subsystem by host.feature.active.collectAsState()
+    val stopping by host.feature.stopping.collectAsState()
+    val model = remember(projectDirectory, subsystem) { SandboxWindowModel(projectDirectory) }
     DisposableEffect(windowId) {
         host.attach(windowId)
         onDispose { host.detach(windowId) }
     }
+    val active = subsystem
+    if (active != null) {
+        ActiveSandboxDialogs(active, model, windowId, showManager, onDismiss)
+    } else if (showManager) {
+        SandboxDisabledDialog(
+            stopping,
+            model.message,
+            onEnable = { scope.launch { model.perform { host.feature.enable() } } },
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun ActiveSandboxDialogs(
+    subsystem: SandboxSubsystem,
+    model: SandboxWindowModel,
+    windowId: String,
+    showManager: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val host = SandboxCommandHost
+    val service = subsystem.service
+    val scope = rememberCoroutineScope()
+    val sessions by service.sessions.collectAsState()
+    val requests by service.consent.requests.collectAsState()
+    val reviewWindow by host.reviewWindow.collectAsState()
     val review = requests.firstOrNull()?.takeIf { reviewWindow == windowId }
     if (review != null) {
         SandboxConsentDialog(review) { service.consent.decide(review.id, it) }
@@ -40,11 +67,12 @@ internal actual fun SandboxSessionDialogs(
             model.busy,
             model.message,
             sessions,
-            onStart = { scope.launch { model.start(windowId) } },
+            onStart = { scope.launch { model.start(windowId, service) } },
             onAction = { action -> scope.launch { model.perform(action) } },
             onRemove = { service.remove(it) },
             onRevoke = { service.consent.revoke() },
             onDismiss = onDismiss,
+            onDisable = { scope.launch { model.perform { host.feature.disable() } } },
         )
     }
 }

@@ -6,6 +6,21 @@ shells, Git commands and compilers it creates inside the same native boundary.
 An MCP call is a transport operation, not a new sandbox boundary. Ordinary terminal
 and plugin execution are outside this feature and retain their existing behavior.
 
+This is process-tree isolation, not application-wide or machine-wide isolation.
+An agent launched outside a sandbox session can execute commands directly without
+calling BOSS; only commands it explicitly launches through the sandbox tools enter
+this boundary. An agent launched as the sandbox root has its child processes
+constrained by the same policy even when it does not use MCP. Calls to external
+MCP servers or other already-running services do not bring those services inside
+the process boundary. Enabling this feature alone does not sandbox an agent.
+
+The subsystem is off by default. Start BOSS using `boss --sandbox`, or explicitly
+enable **Tools > Sandbox command sessions** in an already-running BOSS. The startup
+flag is used alone and refuses to silently modify an existing BOSS instance. It
+does not redirect ordinary command execution. Disabling the subsystem unregisters
+its MCP tools, revokes its approvals and stops its sandbox sessions. The setting is
+not persisted; the next BOSS run is disabled unless explicitly enabled again.
+
 ## Launch from BOSS
 
 Open **Tools > Sandbox command sessions**. Enter the absolute project directory and
@@ -28,8 +43,20 @@ output remains until removed. At most eight sessions are retained. Application
 shutdown revokes consent and waits for native cleanup, including launches that were
 in progress when shutdown started. There is no implicit Windows setup or elevation.
 
-The CLI/MCP launch adapters and agent-scoped additional-permission endpoint are still
-being integrated. The GUI launch path is not a claim that agent escalation is ready.
+When enabled, operator-facing MCP tools also expose the session mechanism through
+`boss mcp invoke sandbox_start --args '{"project":"/absolute/project","policy":"/absolute/policy.toml","profile":"base","argv":["tool","arg"],"reason":"Run project checks"}'`.
+The result is a ticket, not permission to run. Use `sandbox_request_status` with
+`request_id` to poll it while the user reviews permissions in BOSS. A BOSS window
+must be available for review. A disconnected caller does not cancel a submitted
+request. Completed tickets can be removed with `sandbox_forget_request`; at most
+eight tickets are retained independently of the eight-session limit.
+
+`sandbox_sessions`, `sandbox_output`, `sandbox_input`, `sandbox_stop` and
+`sandbox_remove` operate on these sessions. Input is explicit UTF-8 text with no
+implicit newline; `close_stdin` sends EOF. No MCP tool enables the subsystem or
+approves permissions. These are operator tools, not an agent-scoped endpoint.
+The separate agent endpoint/token provisioning remains integration work. The
+operator-facing `sandbox_request_permissions` flow is described below.
 
 ## Policy and approval contract
 
@@ -81,11 +108,21 @@ support, or compatibility with CLIs that require a controlling terminal.
 
 ## Additional permission requests
 
-Since 0.7.0, Cageforge supports explicit permission escalation. The integration must use
-its `requestEscalation`, `approveEscalation` and `launchEscalated` APIs, not rewrite
-the running process's policy. The native contract requires a new immutable sandbox;
-relaunching a session must stop its previous process boundary first. It is not an
-in-place permission change or a promise to preserve an agent's in-memory state.
+The operator-facing `sandbox_request_permissions` tool accepts `session_id`, exact
+`argv`, `filesystem` (`[{"operation":"read","path":"/absolute/input"}]`), `network`
+(for example `["example.com:443"]`) and `reason`. It returns a ticket to poll through
+`sandbox_request_status`. It has no approval argument. A running parent session and
+a BOSS review window are required.
+
+BOSS derives a command-specific runtime from the parent's captured TOML bytes, never
+from a newly read policy file, and uses Cageforge's `requestEscalation`,
+`approveEscalation` and `launchEscalated` APIs. The GUI shows the exact command,
+reason and full expanded native permission request. Approval starts a new command
+boundary. The original agent remains running under its original restrictions.
+The command-specific runtime has no previous process to stop; this is not an
+in-place expansion or a restart of the agent. Additional rights do not accumulate
+into the parent policy. Every additional command is reviewed independently, unless
+that exact command and expanded policy were approved until BOSS closes.
 
 The MCP request must identify the command, project/session, additional filesystem
 or network capabilities, and a human-readable reason. The agent requests access;
@@ -106,7 +143,9 @@ Denial, timeout, cancellation, queue overflow and application shutdown never gra
 permission. A stale dialog cannot approve the next request. This consent mechanism
 and its unit tests are implemented in the session module. Initial GUI launches use
 this same queue. Native escalation has a separate API-level security test; its
-agent MCP/GUI request loop remains integration work, not verified end-to-end functionality.
+agent-only endpoint/token provisioning remains integration work. Native service
+tests also exercise denial, approval, the additional command's access and the
+continued lifetime of the unchanged parent process.
 
 ## Verification work
 

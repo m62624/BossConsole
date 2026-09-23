@@ -35,6 +35,7 @@ class SandboxManagerDialogTest {
                 onRemove = {},
                 onRevoke = {},
                 onDismiss = {},
+                onDisable = {},
             )
         }
         rule.onNodeWithText("Executable (not a shell command)").performScrollTo().performTextReplacement("node")

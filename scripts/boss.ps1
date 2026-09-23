@@ -131,6 +131,7 @@ function Show-Help {
     Write-Host "  doctor                 Reports problems in the running BOSS instance (exit 2 when degraded)"
     Write-Host "  mcp <action> [args]    Discovers and invokes desktop MCP tools (list, describe, invoke)"
     Write-Host "  completion <shell>     Generates shell completion script (bash, zsh, fish)"
+    Write-Host "  --sandbox              Start BOSS with opt-in sandbox command sessions enabled"
     Write-Host "  url <url>              Opens a URL in Fluck browser"
     Write-Host "  workspace <config>     Loads a workspace configuration"
     Write-Host "  file <path>            Opens a file in the editor"
@@ -261,7 +262,7 @@ switch ($Command.ToLower()) {
         }
     }
 
-    { $_ -in "status", "doctor", "mcp", "completion" } {
+    { $_ -in "status", "doctor", "mcp", "completion", "--sandbox" } {
         $bossExe = $env:BOSS_EXE
         if ($bossExe -and -not (Test-Path $bossExe -PathType Leaf)) {
             [Console]::Error.WriteLine("Error: BOSS_EXE does not name an executable file.")

@@ -17,7 +17,10 @@ internal class SandboxWindowModel(
     var message by mutableStateOf<String?>(null)
         private set
 
-    suspend fun start(windowId: String) {
+    suspend fun start(
+        windowId: String,
+        service: SandboxSessionService,
+    ) {
         if (busy) return
         busy = true
         val captured = form
@@ -25,7 +28,7 @@ internal class SandboxWindowModel(
             SandboxCommandHost.reviewIn(windowId)
             val result =
                 sandboxOperationResult {
-                    SandboxCommandHost.service.start(captured.command(), "Run from BOSS GUI")
+                    service.start(captured.command(), "Run from BOSS GUI")
                 }
             message =
                 result.fold(

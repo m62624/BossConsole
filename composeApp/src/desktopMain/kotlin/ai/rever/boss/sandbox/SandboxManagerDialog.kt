@@ -40,6 +40,7 @@ internal fun SandboxManagerDialog(
     onRemove: suspend (String) -> Unit,
     onRevoke: () -> Unit,
     onDismiss: () -> Unit,
+    onDisable: () -> Unit,
 ) {
     BossDialog(onDismissRequest = onDismiss) {
         Surface(color = BossTheme.colors.panel, contentColor = BossTheme.colors.textPrimary) {
@@ -54,7 +55,7 @@ internal fun SandboxManagerDialog(
                 Text("Sandbox command sessions")
                 Text(
                     "Explicit opt-in. The root executable and its descendants share one Cageforge policy. " +
-                        "Ordinary terminals are unchanged.",
+                        "Ordinary terminals and externally launched agents are not isolated by this feature.",
                 )
                 Text("Uses stdin/stdout pipes, not an interactive terminal. Windows requires Cageforge setup first.")
                 SandboxLaunchFields(form, onChange, !busy)
@@ -66,6 +67,7 @@ internal fun SandboxManagerDialog(
                     TextButton(onClick = onDismiss) { Text("Close") }
                 }
                 message?.let { Text(it) }
+                TextButton(onClick = onDisable) { Text("Disable sandboxing and stop all sandbox sessions") }
                 sessions.forEach { entry ->
                     key(entry.id) {
                         Divider()

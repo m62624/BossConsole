@@ -55,7 +55,7 @@ object ShutdownSequence {
                 }
             },
             ShutdownStep("stopping sandbox command sessions") {
-                runBlocking { SandboxCommandHost.service.shutdown() }
+                runBlocking { SandboxCommandHost.feature.shutdown() }
             },
             ShutdownStep("stopping performance monitor") {
                 PerformanceMonitor.stop()

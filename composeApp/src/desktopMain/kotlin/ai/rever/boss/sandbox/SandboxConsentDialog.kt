@@ -51,7 +51,7 @@ internal fun SandboxConsentDialog(
                     }
                 }
                 if (review.requiresRestart) {
-                    Text("Approval launches a new sandbox boundary; existing permissions are not widened.")
+                    Text("Additional permissions apply only to this new command. The requesting agent stays unchanged.")
                 }
                 Text("Until BOSS closes remembers only this exact command and policy. Restarting BOSS asks again.")
                 SandboxConsentButtons(request.id, onDecide)

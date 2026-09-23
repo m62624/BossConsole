@@ -27,3 +27,9 @@ BOSS_BIN="$scratch/missing" bash "$root/scripts/boss" status > "$scratch/out" 2>
 [[ ! -s "$scratch/out" ]]
 grep -q 'binary not found' "$scratch/err"
 echo 'Headless launcher tests passed'
+status=0
+BOSS_BIN="$scratch/fake-boss" bash "$root/scripts/boss" --sandbox > "$scratch/out" 2> "$scratch/err" || status=$?
+[[ "$status" == 7 ]]
+[[ "$(< "$scratch/out")" == '--sandbox' ]]
+[[ ! -s "$scratch/err" ]]
+echo 'Sandbox startup forwarding test passed'
