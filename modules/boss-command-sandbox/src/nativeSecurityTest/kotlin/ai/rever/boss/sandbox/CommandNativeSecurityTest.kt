@@ -238,6 +238,7 @@ class CommandNativeSecurityTest {
                         .single()
                 service.consent.decide(initial.id, SandboxConsentChoice.ONCE)
                 val parent = requireNotNull(start.await())
+                CommandNativeTestRunner.stage("checking guardian before any additional grant")
                 assertParentConfined(parent)
                 val additional =
                     SandboxEscalation(
@@ -266,12 +267,14 @@ class CommandNativeSecurityTest {
                 withTimeout(20000) {
                     elevated.session.output.first { it.stdout.text.contains("ESCALATION_OK:approved") || !it.running }
                 }
+                CommandNativeTestRunner.stage("checking guardian while additional command runs")
                 assertParentConfined(parent)
                 elevated.session.closeInput()
                 val output = elevated.session.awaitCompletion()
                 assertEquals(0, output.exitCode, output.stderr.text)
                 assertTrue(output.stdout.text.contains("ESCALATION_OK:approved"), output.stdout.text)
                 assertTrue(parent.session.output.value.running, "Additional command must not restart the agent")
+                CommandNativeTestRunner.stage("checking guardian after additional command exits")
                 assertParentConfined(parent)
             } finally {
                 service.shutdown()
