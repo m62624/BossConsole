@@ -240,13 +240,11 @@ class CommandNativeSecurityTest {
                 val parent = requireNotNull(start.await())
                 CommandNativeTestRunner.stage("checking guardian before any additional grant")
                 assertParentConfined(parent)
-                val additional =
-                    SandboxEscalation(
-                        parentCommand.argv.dropLast(3) + listOf("escalated-held", approvedFile.toString()),
-                        listOf("read" to approvedFile.toString()),
-                        emptyList(),
-                        "Read approved input for one command",
-                    )
+                val additional = readFileEscalation(parentCommand, approvedFile)
+                if (WindowsSetup.isSupported()) {
+                    assertWindowsEscalationFailsClosed(service, parent, additional)
+                    return@runBlocking
+                }
                 val denied = async { service.startEscalated(parent.id, additional) }
                 val denial =
                     service.consent.requests
@@ -274,28 +272,11 @@ class CommandNativeSecurityTest {
                 assertEquals(0, output.exitCode, output.stderr.text)
                 assertTrue(output.stdout.text.contains("ESCALATION_OK:approved"), output.stdout.text)
                 assertTrue(parent.session.output.value.running, "Additional command must not restart the agent")
-                CommandNativeTestRunner.stage("checking guardian after additional command exits")
                 assertParentConfined(parent)
             } finally {
                 service.shutdown()
             }
         }
-
-    private suspend fun assertParentConfined(parent: SandboxSessionEntry) {
-        val before = parent.session.output.value.stdout.text
-        parent.session.sendInput("check\n")
-        val output =
-            withTimeout(20000) {
-                parent.session.output.first { it.stdout.text != before || !it.running }
-            }
-        assertTrue(output.running, output.stderr.text)
-        assertTrue(
-            output.stdout.text
-                .removePrefix(before)
-                .contains("PARENT_DENIED"),
-            output.stdout.text,
-        )
-    }
 
     private fun command(
         project: Path,
@@ -361,6 +342,43 @@ class CommandNativeSecurityTest {
     }
 
     private fun quote(path: Path): String = quoteText(path.toString())
+}
+
+private fun readFileEscalation(
+    parentCommand: SandboxCommand,
+    approvedFile: Path,
+) = SandboxEscalation(
+    parentCommand.argv.dropLast(3) + listOf("escalated-held", approvedFile.toString()),
+    listOf("read" to approvedFile.toString()),
+    emptyList(),
+    "Read approved input for one command",
+)
+
+private suspend fun assertWindowsEscalationFailsClosed(
+    service: SandboxSessionService,
+    parent: SandboxSessionEntry,
+    additional: SandboxEscalation,
+) {
+    CommandNativeTestRunner.stage("rejecting unsafe Windows concurrent escalation")
+    assertFailsWith<IllegalStateException> { service.startEscalated(parent.id, additional) }
+    assertParentConfined(parent)
+    assertEquals(1, service.sessions.value.size)
+}
+
+private suspend fun assertParentConfined(parent: SandboxSessionEntry) {
+    val before = parent.session.output.value.stdout.text
+    parent.session.sendInput("check\n")
+    val output =
+        withTimeout(20000) {
+            parent.session.output.first { it.stdout.text != before || !it.running }
+        }
+    assertTrue(output.running, output.stderr.text)
+    assertTrue(
+        output.stdout.text
+            .removePrefix(before)
+            .contains("PARENT_DENIED"),
+        output.stdout.text,
+    )
 }
 
 private fun waitForExit(process: Process): Int {

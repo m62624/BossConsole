@@ -4,6 +4,7 @@ import ai.cageforge.Cageforge
 import ai.cageforge.PermissionApprover
 import ai.cageforge.PermissionEscalationRequest
 import ai.cageforge.RuntimeContext
+import ai.cageforge.WindowsSetup
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
@@ -14,6 +15,10 @@ internal class CageforgeEscalationLauncher {
         base: SandboxSessionPlan,
         additional: SandboxEscalation,
     ): SandboxEscalationPlan {
+        check(!WindowsSetup.isSupported()) {
+            "Concurrent additional-permission commands are unavailable on Windows with Cageforge Java 0.7.1: " +
+                "its shared filesystem read authority can expose the command's grant to the running agent"
+        }
         val snapshot = base.snapshot.forCommand(additional.argv)
         val context = RuntimeContext(snapshot.projectDirectory)
         Cageforge.checkToml(snapshot.toml, SandboxPolicySnapshot.LAUNCH_PROFILE, context)

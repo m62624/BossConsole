@@ -124,6 +124,12 @@ in-place expansion or a restart of the agent. Additional rights do not accumulat
 into the parent policy. Every additional command is reviewed independently, unless
 that exact command and expanded policy were approved until BOSS closes.
 
+On Windows with Cageforge Java 0.7.1, BOSS rejects concurrent additional-permission
+commands before preparation. Native testing exposed a shared filesystem read authority
+that let the running parent read a file granted to another command. Initial sandbox
+sessions remain available; dynamic command rights on Windows require an upstream
+Cageforge isolation fix and a new binding release. This limitation is fail closed.
+
 The MCP request must identify the command, project/session, additional filesystem
 or network capabilities, and a human-readable reason. The agent requests access;
 it never supplies the approval decision. BOSS must show the exact command and
