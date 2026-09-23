@@ -16,6 +16,9 @@ class SandboxSessionPlan internal constructor(
     val approvalDigest: String get() = snapshot.digest
     private val consumed = AtomicBoolean()
 
+    internal fun review(reason: String): SandboxPermissionReview =
+        SandboxPermissionReview(approvalDigest, projectDirectory.toString(), argv, permissionsJson, reason, false)
+
     internal fun claim(approvedDigest: String) {
         require(approvedDigest == approvalDigest) { "Approval does not match the command and policy shown" }
         check(consumed.compareAndSet(false, true)) { "This session plan has already been used; prepare a new session" }

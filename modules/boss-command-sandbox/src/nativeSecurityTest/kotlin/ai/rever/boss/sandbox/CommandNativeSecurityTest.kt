@@ -6,6 +6,8 @@ import ai.cageforge.PermissionApprover
 import ai.cageforge.RuntimeContext
 import ai.cageforge.WindowsSetup
 import ai.cageforge.WindowsSetupState
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
@@ -111,17 +113,38 @@ class CommandNativeSecurityTest {
         val project = temporary.newFolder("tree").toPath()
         Files.createDirectory(project.resolve(".git"))
         CommandNativeTestRunner.stage("preparing descendant termination policy")
-        val plan = launcher.prepare(command(project, listOf("tree", project.toString())))
         val heartbeat = project.resolve("heartbeat")
-        CommandNativeTestRunner.stage("launching heartbeat boundary")
-        launcher.launch(plan, plan.approvalDigest).use {
-            CommandNativeTestRunner.stage("waiting for descendant heartbeat")
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
-            while ((!Files.exists(heartbeat) || Files.size(heartbeat) < 2) && System.nanoTime() < deadline) {
-                Thread.sleep(25)
+        runBlocking {
+            val service = SandboxSessionService()
+            try {
+                val start =
+                    async {
+                        service.start(
+                            command(project, listOf("tree", project.toString())),
+                            "Native descendant cleanup test",
+                        )
+                    }
+                val review =
+                    service.consent.requests
+                        .first { it.isNotEmpty() }
+                        .single()
+                assertTrue(service.sessions.value.isEmpty(), "Review must precede native launch")
+                assertFalse(Files.exists(heartbeat), "No process may run before approval")
+                CommandNativeTestRunner.stage("approving and launching heartbeat boundary")
+                service.consent.decide(review.id, SandboxConsentChoice.ONCE)
+                val entry = requireNotNull(start.await())
+                CommandNativeTestRunner.stage("waiting for descendant heartbeat")
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+                while ((!Files.exists(heartbeat) || Files.size(heartbeat) < 2) && System.nanoTime() < deadline) {
+                    Thread.sleep(25)
+                }
+                assertTrue(Files.exists(heartbeat) && Files.size(heartbeat) >= 2, "Descendant did not start")
+                CommandNativeTestRunner.stage("closing heartbeat boundary through app service")
+                service.shutdown()
+                assertFalse(entry.session.output.value.running)
+            } finally {
+                service.shutdown()
             }
-            assertTrue(Files.exists(heartbeat) && Files.size(heartbeat) >= 2, "Descendant did not start")
-            CommandNativeTestRunner.stage("closing heartbeat boundary")
         }
         val stoppedSize = Files.size(heartbeat)
         Thread.sleep(300)
