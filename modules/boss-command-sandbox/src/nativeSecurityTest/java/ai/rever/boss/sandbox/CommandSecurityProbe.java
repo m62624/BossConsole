@@ -13,6 +13,21 @@ import java.util.Arrays;
 public final class CommandSecurityProbe {
     public static void main(String[] args) throws Exception {
         String mode = args[0];
+        if (mode.equals("baseline")) {
+            try {
+                Files.readString(Path.of(args[1]));
+                throw new AssertionError("Baseline sandbox read a file outside its policy");
+            } catch (IOException expected) {
+                // The host confirms this existing file is readable outside the sandbox.
+            }
+            System.out.println("BASELINE_OK");
+            return;
+        }
+        if (mode.equals("escalated")) {
+            String value = Files.readString(Path.of(args[1]));
+            System.out.println("ESCALATION_OK:" + value);
+            return;
+        }
         Path project = Path.of(args[1]);
         if (mode.equals("heartbeat")) {
             while (true) {

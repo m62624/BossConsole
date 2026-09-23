@@ -1,6 +1,9 @@
 package ai.rever.boss.sandbox
 
+import ai.cageforge.Cageforge
 import ai.cageforge.CageforgeConfigurationException
+import ai.cageforge.PermissionApprover
+import ai.cageforge.RuntimeContext
 import ai.cageforge.WindowsSetup
 import ai.cageforge.WindowsSetupState
 import kotlinx.coroutines.runBlocking
@@ -125,6 +128,66 @@ class CommandNativeSecurityTest {
         assertEquals(stoppedSize, Files.size(heartbeat), "Descendant survived boundary termination")
     }
 
+    @Test(timeout = 90000)
+    fun cageforgeEscalationLaunchesOnlyAfterAnExplicitAdditionalGrant() {
+        val project = temporary.newFolder("escalation-project").toPath()
+        Files.createDirectory(project.resolve(".git"))
+        val privateDirectory = temporary.newFolder("escalation-private").toPath()
+        val approvedFile = Files.writeString(privateDirectory.resolve("approved-input"), "approved")
+        assertEquals("approved", Files.readString(approvedFile))
+        val command = command(project, listOf("baseline", approvedFile.toString()))
+        val toml = escalationPolicy(command, project)
+        val context = RuntimeContext(project)
+        val baseRequest =
+            Cageforge.permissionRequest(
+                toml,
+                "escalation-test",
+                context,
+                toolId = "boss-command-session",
+                configDigest = "native-escalation-test",
+            )
+        val baseGrant = PermissionApprover().approve(baseRequest)
+
+        Cageforge
+            .fromToml(
+                toml,
+                "escalation-test",
+                context,
+                baseGrant,
+                baseRequest,
+            ).use { runtime ->
+                runtime.launchProcess().use { firstLaunch ->
+                    assertEquals(0, waitForExit(firstLaunch))
+                }
+
+                runtime
+                    .requestEscalation(
+                        listOf("read" to approvedFile.toString()),
+                        emptyList(),
+                        "Read the explicitly approved input file",
+                    ).use { escalation ->
+                        assertTrue(escalation.filesystem.contains("read" to approvedFile.toString()))
+                        assertTrue(escalation.json.contains(approvedFile.toString()))
+                        val escalationGrant = PermissionApprover().approveEscalation(escalation)
+                        val argv =
+                            listOf(
+                                executable.toString(),
+                                "-cp",
+                                probeClasspath,
+                                CommandSecurityProbe::class.java.name,
+                                "escalated",
+                                approvedFile.toString(),
+                            )
+                        runtime.launchEscalated(escalation, escalationGrant, argv).use { escalated ->
+                            val output = requireNotNull(escalated.stdout).bufferedReader().readText()
+                            assertEquals(0, escalated.waitFor().exitCode)
+                            assertTrue(output.contains("ESCALATION_OK:approved"), output)
+                        }
+                    }
+            }
+        assertEquals("approved", Files.readString(approvedFile))
+    }
+
     @Test
     fun invalidInheritanceFailsBeforeLaunch() {
         val project = temporary.newFolder("invalid").toPath()
@@ -197,5 +260,37 @@ class CommandNativeSecurityTest {
         return SandboxCommand(project, policy, "cli", argv)
     }
 
-    private fun quote(path: Path): String = "\"${path.toString().replace("\\", "\\\\").replace("\"", "\\\"")}\""
+    private fun quote(path: Path): String = quoteText(path.toString())
 }
+
+private fun waitForExit(process: Process): Int {
+    if (!process.waitFor(30, TimeUnit.SECONDS)) return -1
+    return process.exitValue()
+}
+
+private fun escalationPolicy(
+    command: SandboxCommand,
+    project: Path,
+): String {
+    val policy = Files.readString(command.policyFile)
+    val args = command.argv.drop(1).joinToString(", ", transform = ::quoteText)
+    return policy +
+        """
+
+        [profiles.escalation-test]
+        inherits = ["${command.profile}"]
+        [profiles.escalation-test.approval]
+        mode = "preflight-and-on-demand"
+        persistence = "session"
+        [profiles.escalation-test.command]
+        program = ${quoteText(command.argv.first())}
+        args = [$args]
+        working_directory = ${quoteText(project.toString())}
+        [profiles.escalation-test.command.stdio]
+        stdin = "pipe"
+        stdout = "pipe"
+        stderr = "pipe"
+        """.trimIndent()
+}
+
+private fun quoteText(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
