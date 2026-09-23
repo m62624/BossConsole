@@ -6,6 +6,31 @@ shells, Git commands and compilers it creates inside the same native boundary.
 An MCP call is a transport operation, not a new sandbox boundary. Ordinary terminal
 and plugin execution are outside this feature and retain their existing behavior.
 
+## Launch from BOSS
+
+Open **Tools > Sandbox command sessions**. Enter the absolute project directory and
+policy TOML path, choose a profile, then enter the executable and a JSON array of
+arguments. For example, executable `node` with arguments `["script.js", "a b", ""]`
+passes three distinct arguments, including the final empty one. BOSS does not parse
+these fields as a shell command.
+
+**Review and run** prepares the native permission request without starting a process.
+The dialog shows the project, exact argv and Cageforge's resolved permissions. Deny,
+approve once, or remember that exact review until BOSS closes. Changed commands or
+policies still require a new approval. The manager also offers **Revoke remembered
+approvals**, which invalidates pending approvals but does not stop already-running
+sessions.
+
+The manager retains bounded stdout/stderr tails, accepts lines on stdin, sends EOF,
+and stops the root process together with its descendants. Closing the manager does
+not stop sessions; use **Stop session and descendants**, or quit BOSS. Finished
+output remains until removed. At most eight sessions are retained. Application
+shutdown revokes consent and waits for native cleanup, including launches that were
+in progress when shutdown started. There is no implicit Windows setup or elevation.
+
+The CLI/MCP launch adapters and agent-scoped additional-permission endpoint are still
+being integrated. The GUI launch path is not a claim that agent escalation is ready.
+
 ## Policy and approval contract
 
 A session selects a project directory, a TOML file, a named CLI profile, and an
@@ -19,8 +44,8 @@ The final child profile `boss-command-session` is reserved. It enforces prefligh
 approval for the initial launch and selects Cageforge's mode required for
 on-demand escalation. It also captures stdin/stdout/stderr. It inherits the
 selected policy; native Cageforge resolves all filesystem, environment, network
-and OS-specific rules. The BOSS MCP request and GUI approval loop is still
-integration work, described below.
+and OS-specific rules. MCP additional-permission requests are still integration
+work, described below.
 The project directory is the resolution context even when the TOML file is elsewhere.
 There is no automatic discovery or execution of repository-provided commands.
 
@@ -79,17 +104,21 @@ The host consent queue implements these two scopes:
 
 Denial, timeout, cancellation, queue overflow and application shutdown never grant
 permission. A stale dialog cannot approve the next request. This consent mechanism
-and its unit tests are implemented in the session module; native escalation and
-GUI/MCP wiring remain integration work, not verified end-to-end functionality.
+and its unit tests are implemented in the session module. Initial GUI launches use
+this same queue. Native escalation has a separate API-level security test; its
+agent MCP/GUI request loop remains integration work, not verified end-to-end functionality.
 
 ## Verification work
 
 The command session module separates immutable preparation and native launch from
 Compose and MCP integration. Ordinary tests cover snapshot identity, argument
-handling, bounds and approval replay. Native policy and security tests must exercise
+handling, bounds, approval replay, cancellation during native acquisition and
+application shutdown. Compose tests cover explicit submission, exact argv and the
+request-specific arming of both approval buttons. Native policy and security tests exercise
 the published binding and real backend on Linux, macOS and Windows. Linux enforcement
-runs in a prepared QEMU guest with the consumer compiled on the host. GUI tests must
-exercise opt-in, review, denial, failure, output and termination through Compose.
+runs in a prepared QEMU guest with the consumer compiled on the host. The descendant
+termination probe uses the application session service and its consent queue.
+GUI coverage for the full agent escalation flow remains required before completion.
 
 On Windows, each native test restores the explicitly installed `WindowsSetup`
 before JUnit removes that test's temporary files, because Cageforge restores

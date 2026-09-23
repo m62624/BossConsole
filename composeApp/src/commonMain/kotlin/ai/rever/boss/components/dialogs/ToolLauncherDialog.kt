@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
+import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -123,7 +124,10 @@ private const val SCROLLBAR_ALPHA = 0.7f
  * does from its icon - custom `onClick` handlers included.
  */
 @Composable
-fun BossDraggableComponent.ToolLauncherDialog(onDismiss: () -> Unit) {
+fun BossDraggableComponent.ToolLauncherDialog(
+    onDismiss: () -> Unit,
+    onSandboxSessions: () -> Unit,
+) {
     var query by remember { mutableStateOf("") }
 
     // Every slot, in the order they are drawn down the two rails, so the grid reads the way the
@@ -134,6 +138,7 @@ fun BossDraggableComponent.ToolLauncherDialog(onDismiss: () -> Unit) {
     // freeze the list at whatever was registered when the dialog opened.
     val allTools = allSidebarTools()
     val matches = allTools.filter { matchesToolQuery(it, query) }
+    val matchesSandbox = "Sandbox command sessions".contains(query, ignoreCase = true)
 
     // Type-to-open, the way a launcher is expected to behave: the field has focus the moment the
     // dialog appears, so the first keystroke filters instead of being swallowed, and Enter takes
@@ -157,9 +162,12 @@ fun BossDraggableComponent.ToolLauncherDialog(onDismiss: () -> Unit) {
     val openFirstMatch: () -> Unit = {
         // Nothing to open when the query matches nothing: Enter on an empty grid should do
         // nothing rather than close the dialog, which would look like it had opened something.
-        matches.firstOrNull()?.let { tool ->
+        val tool = matches.firstOrNull()
+        if (tool != null) {
             handleSidebarItemClick(tool)
             onDismiss()
+        } else if (matchesSandbox) {
+            onSandboxSessions()
         }
         Unit
     }
@@ -182,7 +190,13 @@ fun BossDraggableComponent.ToolLauncherDialog(onDismiss: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
             )
 
-            if (matches.isEmpty()) {
+            if (matchesSandbox) {
+                TextButton(onClick = onSandboxSessions) {
+                    Text("Sandbox command sessions", color = BossTheme.colors.textPrimary)
+                }
+            }
+
+            if (matches.isEmpty() && !matchesSandbox) {
                 Text(
                     text = if (allTools.isEmpty()) "No tools are loaded" else "No tools match \"$query\"",
                     color = BossTheme.colors.textSecondary,

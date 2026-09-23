@@ -7,6 +7,7 @@ import ai.rever.boss.dashboard.RecentFilesManager
 import ai.rever.boss.performance.PerformanceMonitor
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.browser.FluckEngine
+import ai.rever.boss.sandbox.SandboxCommandHost
 import ai.rever.boss.services.auth.UserDataStorage
 import ai.rever.boss.updater.AppUpdateRealtimeService
 import ai.rever.boss.updater.UpdateCoordinator
@@ -52,6 +53,9 @@ object ShutdownSequence {
                     RecentBrowserPagesManager.flushPendingSaves()
                     UserDataStorage.flushPendingSaves()
                 }
+            },
+            ShutdownStep("stopping sandbox command sessions") {
+                runBlocking { SandboxCommandHost.service.shutdown() }
             },
             ShutdownStep("stopping performance monitor") {
                 PerformanceMonitor.stop()
