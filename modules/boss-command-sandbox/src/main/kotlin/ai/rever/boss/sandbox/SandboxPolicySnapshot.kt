@@ -14,12 +14,26 @@ internal class SandboxPolicySnapshot private constructor(
     val profile: String,
     val argv: List<String>,
     val toml: String,
+    private val source: String,
 ) {
     val digest: String =
         MessageDigest
             .getInstance("SHA-256")
             .digest("$projectDirectory\u0000$policyFile\u0000$toml".toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
+
+    /** New command, same captured policy bytes. Never reread an agent-editable policy file. */
+    fun forCommand(arguments: List<String>): SandboxPolicySnapshot {
+        val captured = checkedArguments(arguments)
+        return SandboxPolicySnapshot(
+            projectDirectory,
+            policyFile,
+            profile,
+            captured,
+            compose(source, profile, captured, projectDirectory),
+            source,
+        )
+    }
 
     companion object {
         const val LAUNCH_PROFILE = "boss-command-session"
@@ -35,12 +49,7 @@ internal class SandboxPolicySnapshot private constructor(
             require(Files.isRegularFile(policy)) { "Policy must be a regular file" }
             require(command.profile.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*"))) { "Invalid profile name" }
             require(command.profile != LAUNCH_PROFILE) { "$LAUNCH_PROFILE is reserved for the host" }
-            val argv = command.argv.toList()
-            require(argv.isNotEmpty() && argv.first().isNotBlank()) { "An executable is required" }
-            require(argv.none { '\u0000' in it }) { "Command arguments must not contain NUL" }
-            require(argv.sumOf { it.toByteArray(StandardCharsets.UTF_8).size.toLong() + 1 } <= MAX_ARGUMENT_BYTES) {
-                "Command arguments exceed 128 KiB"
-            }
+            val argv = checkedArguments(command.argv)
             val bytes = Files.newInputStream(policy).use { it.readNBytes(MAX_POLICY_BYTES + 1) }
             require(bytes.size <= MAX_POLICY_BYTES) { "Policy exceeds 1 MiB" }
             val source =
@@ -55,7 +64,18 @@ internal class SandboxPolicySnapshot private constructor(
                 command.profile,
                 Collections.unmodifiableList(argv),
                 compose(source, command.profile, argv, project),
+                source,
             )
+        }
+
+        private fun checkedArguments(arguments: List<String>): List<String> {
+            val argv = arguments.toList()
+            require(argv.isNotEmpty() && argv.first().isNotBlank()) { "An executable is required" }
+            require(argv.none { '\u0000' in it }) { "Command arguments must not contain NUL" }
+            require(argv.sumOf { it.toByteArray(StandardCharsets.UTF_8).size.toLong() + 1 } <= MAX_ARGUMENT_BYTES) {
+                "Command arguments exceed 128 KiB"
+            }
+            return Collections.unmodifiableList(argv)
         }
 
         // Cageforge owns inheritance, canonical rule replacement and OS overlays. The final

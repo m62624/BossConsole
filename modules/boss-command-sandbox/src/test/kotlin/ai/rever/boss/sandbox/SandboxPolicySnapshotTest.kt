@@ -36,6 +36,19 @@ class SandboxPolicySnapshotTest {
     }
 
     @Test
+    fun `additional commands reuse captured policy and never reread a changed file`() {
+        val command = command()
+        val original = SandboxPolicySnapshot.read(command)
+        Files.writeString(command.policyFile, "malicious replacement")
+        val derived = original.forCommand(listOf("cargo", "test"))
+        assertTrue(derived.toml.contains("[profiles.node]"))
+        assertTrue(!derived.toml.contains("malicious replacement"))
+        assertEquals(listOf("cargo", "test"), derived.argv)
+        assertNotEquals(original.digest, derived.digest)
+        assertFailsWith<IllegalArgumentException> { original.forCommand(listOf("tool", "\u0000")) }
+    }
+
+    @Test
     fun `host profile permits Cageforge escalation without changing the selected profile`() {
         val snapshot = SandboxPolicySnapshot.read(command())
         assertTrue(snapshot.toml.contains("[profiles.${SandboxPolicySnapshot.LAUNCH_PROFILE}.approval]"))

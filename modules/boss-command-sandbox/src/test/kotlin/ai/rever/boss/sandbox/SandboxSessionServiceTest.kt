@@ -145,6 +145,70 @@ class SandboxSessionServiceTest {
         return SandboxCommand(project, policy, "tool", listOf("tool", "arg with spaces"))
     }
 
+    @Test(timeout = 10000)
+    fun `additional command denial and cancellation release preparation without launching`() =
+        runBlocking {
+            val backend = TestBackend()
+            val service = SandboxSessionService(SandboxConsentQueue(), backend)
+            try {
+                val initial = async { service.start(command(), "Agent") }
+                decide(service, SandboxConsentChoice.ONCE)
+                val parent = requireNotNull(initial.await())
+                val request =
+                    SandboxEscalation(
+                        listOf("other", "exact arg"),
+                        listOf("read" to "/input"),
+                        emptyList(),
+                        "Read",
+                    )
+                val denied = async { service.startEscalated(parent.id, request) }
+                val review =
+                    service.consent.requests
+                        .first { it.isNotEmpty() }
+                        .single()
+                assertEquals(request.argv, review.review.argv)
+                service.consent.decide(review.id, SandboxConsentChoice.DENY)
+                assertNull(denied.await())
+                assertEquals(1, backend.launches)
+                assertEquals(1, backend.preparationsClosed)
+                val cancelled = async { service.startEscalated(parent.id, request) }
+                service.consent.requests.first { it.isNotEmpty() }
+                cancelled.cancelAndJoin()
+                assertEquals(2, backend.preparationsClosed)
+                assertEquals(1, backend.launches)
+                assertTrue(parent.session.output.value.running)
+            } finally {
+                service.shutdown()
+            }
+        }
+
+    @Test(timeout = 10000)
+    fun `additional command launches only after its own approval and preserves parent`() =
+        runBlocking {
+            val backend = TestBackend()
+            val service = SandboxSessionService(SandboxConsentQueue(), backend)
+            try {
+                val initial = async { service.start(command(), "Agent") }
+                decide(service, SandboxConsentChoice.ONCE)
+                val parent = requireNotNull(initial.await())
+                val request = SandboxEscalation(listOf("other"), listOf("read" to "/input"), emptyList(), "Read")
+                val pending = async { service.startEscalated(parent.id, request) }
+                val review =
+                    service.consent.requests
+                        .first { it.isNotEmpty() }
+                        .single()
+                assertEquals(1, backend.launches)
+                service.consent.decide(review.id, SandboxConsentChoice.ONCE)
+                val child = requireNotNull(pending.await())
+                assertEquals(request.argv, child.review.argv)
+                assertEquals(2, backend.launches)
+                assertTrue(parent.session.output.value.running)
+                assertEquals(1, backend.preparationsClosed)
+            } finally {
+                service.shutdown()
+            }
+        }
+
     private suspend fun decide(
         service: SandboxSessionService,
         choice: SandboxConsentChoice,
@@ -167,6 +231,26 @@ class SandboxSessionServiceTest {
         val release = CountDownLatch(1)
         val closed = AtomicBoolean()
         var launches = 0
+        var preparationsClosed = 0
+
+        override fun prepareEscalation(
+            base: SandboxSessionPlan,
+            additional: SandboxEscalation,
+        ): SandboxEscalationPlan =
+            object : SandboxEscalationPlan {
+                override val review =
+                    SandboxSessionPlan(
+                        base.snapshot.forCommand(additional.argv),
+                        "expanded-digest",
+                        "{\"expanded\":true}",
+                    ).review(additional.reason)
+
+                override fun launch() = this@TestBackend.launch(base)
+
+                override fun close() {
+                    preparationsClosed++
+                }
+            }
 
         override fun prepare(command: SandboxCommand): SandboxSessionPlan =
             SandboxSessionPlan(SandboxPolicySnapshot.read(command), "native-digest", "{}")

@@ -9,6 +9,7 @@ import ai.cageforge.WindowsSetupState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -218,6 +219,79 @@ class CommandNativeSecurityTest {
         Files.writeString(command.policyFile, "[profiles.cli]\ninherits = [\"missing\"]\n")
         assertFailsWith<CageforgeConfigurationException> { launcher.prepare(command) }
         assertFalse(Files.exists(project.resolve("root-allowed")))
+    }
+
+    @Test(timeout = 120000)
+    fun serviceEscalationRequiresConsentAndKeepsParentRunning() =
+        runBlocking {
+            val project = temporary.newFolder("service-escalation").toPath()
+            Files.createDirectory(project.resolve(".git"))
+            val privateDirectory = temporary.newFolder("service-private").toPath()
+            val approvedFile = Files.writeString(privateDirectory.resolve("approved-input"), "approved")
+            val parentCommand = command(project, listOf("guardian", project.toString(), approvedFile.toString()))
+            val service = SandboxSessionService()
+            try {
+                val start = async { service.start(parentCommand, "Start requesting agent") }
+                val initial =
+                    service.consent.requests
+                        .first { it.isNotEmpty() }
+                        .single()
+                service.consent.decide(initial.id, SandboxConsentChoice.ONCE)
+                val parent = requireNotNull(start.await())
+                assertParentConfined(parent)
+                val additional =
+                    SandboxEscalation(
+                        parentCommand.argv.dropLast(3) + listOf("escalated-held", approvedFile.toString()),
+                        listOf("read" to approvedFile.toString()),
+                        emptyList(),
+                        "Read approved input for one command",
+                    )
+                val denied = async { service.startEscalated(parent.id, additional) }
+                val denial =
+                    service.consent.requests
+                        .first { it.isNotEmpty() }
+                        .single()
+                service.consent.decide(denial.id, SandboxConsentChoice.DENY)
+                assertEquals(null, denied.await())
+                assertEquals(1, service.sessions.value.size)
+                val launch = async { service.startEscalated(parent.id, additional) }
+                val review =
+                    service.consent.requests
+                        .first { it.isNotEmpty() }
+                        .single()
+                assertEquals(additional.argv, review.review.argv)
+                assertTrue(review.review.permissionsJson.contains("approved-input"))
+                service.consent.decide(review.id, SandboxConsentChoice.ONCE)
+                val elevated = requireNotNull(launch.await())
+                withTimeout(20000) {
+                    elevated.session.output.first { it.stdout.text.contains("ESCALATION_OK:approved") || !it.running }
+                }
+                assertParentConfined(parent)
+                elevated.session.closeInput()
+                val output = elevated.session.awaitCompletion()
+                assertEquals(0, output.exitCode, output.stderr.text)
+                assertTrue(output.stdout.text.contains("ESCALATION_OK:approved"), output.stdout.text)
+                assertTrue(parent.session.output.value.running, "Additional command must not restart the agent")
+                assertParentConfined(parent)
+            } finally {
+                service.shutdown()
+            }
+        }
+
+    private suspend fun assertParentConfined(parent: SandboxSessionEntry) {
+        val before = parent.session.output.value.stdout.text
+        parent.session.sendInput("check\n")
+        val output =
+            withTimeout(20000) {
+                parent.session.output.first { it.stdout.text != before || !it.running }
+            }
+        assertTrue(output.running, output.stderr.text)
+        assertTrue(
+            output.stdout.text
+                .removePrefix(before)
+                .contains("PARENT_DENIED"),
+            output.stdout.text,
+        )
     }
 
     private fun command(

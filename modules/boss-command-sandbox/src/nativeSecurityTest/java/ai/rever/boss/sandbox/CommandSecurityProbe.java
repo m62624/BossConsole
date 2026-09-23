@@ -23,9 +23,24 @@ public final class CommandSecurityProbe {
             System.out.println("BASELINE_OK");
             return;
         }
-        if (mode.equals("escalated")) {
+        if (mode.equals("escalated") || mode.equals("escalated-held")) {
             String value = Files.readString(Path.of(args[1]));
             System.out.println("ESCALATION_OK:" + value);
+            System.out.flush();
+            if (mode.equals("escalated-held")) System.in.read();
+            return;
+        }
+        if (mode.equals("guardian")) {
+            java.io.BufferedReader input = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
+            while (input.readLine() != null) {
+                try {
+                    Files.readString(Path.of(args[2]));
+                    throw new AssertionError("Another command's grant widened the requesting agent");
+                } catch (IOException expected) {
+                    System.out.println("PARENT_DENIED");
+                    System.out.flush();
+                }
+            }
             return;
         }
         Path project = Path.of(args[1]);

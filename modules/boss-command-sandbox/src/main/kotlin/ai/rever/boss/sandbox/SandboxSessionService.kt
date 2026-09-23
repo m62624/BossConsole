@@ -46,15 +46,39 @@ class SandboxSessionService internal constructor(
             val review = plan.review(reason)
             consent.request(review)?.let { permit ->
                 consent.consume(permit, review)
-                acquire(plan, review)
+                acquire(plan, review) { backend.launch(plan) }
             }
         }
     }
 
+    /** Run a new command with reviewed additional rights, leaving the original agent unchanged. */
+    suspend fun startEscalated(
+        parentId: String,
+        additional: SandboxEscalation,
+    ): SandboxSessionEntry? =
+        lifecycle.withLock {
+            check(!closed.get()) { "Sandbox sessions are closed" }
+            val parent = requireNotNull(sessions.value.singleOrNull { it.id == parentId }) { "Unknown parent session" }
+            check(parent.session.output.value.running) { "The requesting session has stopped" }
+            check(sessions.value.size < MAX_SESSIONS) { "Remove a finished sandbox session before starting another" }
+            val prepared =
+                withContext(NonCancellable) {
+                    withContext(Dispatchers.IO) { backend.prepareEscalation(parent.plan, additional) }
+                }
+            prepared.use {
+                currentCoroutineContext().ensureActive()
+                consent.request(it.review)?.let { permit ->
+                    consent.consume(permit, it.review)
+                    check(parent.session.output.value.running) { "The requesting session has stopped" }
+                    acquire(parent.plan, it.review, it::launch)
+                }
+            }
+        }
+
     /** Finished output stays available until explicitly removed; running sessions cannot be forgotten. */
     suspend fun remove(sessionId: String) {
         lifecycle.withLock {
-            val entry = sessions.value.single { it.id == sessionId }
+            val entry = requireNotNull(sessions.value.singleOrNull { it.id == sessionId }) { "Unknown sandbox session" }
             check(!entry.session.output.value.running) { "Stop the sandbox session before removing it" }
             mutableSessions.value = sessions.value.filterNot { it.id == sessionId }
         }
@@ -80,14 +104,15 @@ class SandboxSessionService internal constructor(
     private suspend fun acquire(
         plan: SandboxSessionPlan,
         review: SandboxPermissionReview,
+        launch: () -> ManagedSandboxSession,
     ): SandboxSessionEntry {
         // JNI acquisition is synchronous. Cancellation must not discard a successfully acquired owner.
-        val session = withContext(NonCancellable) { withContext(Dispatchers.IO) { backend.launch(plan) } }
+        val session = withContext(NonCancellable) { withContext(Dispatchers.IO) { launch() } }
         var transferred = false
         try {
             currentCoroutineContext().ensureActive()
             check(!closed.get()) { "Sandbox sessions are closed" }
-            val entry = SandboxSessionEntry(review, session)
+            val entry = SandboxSessionEntry(review, session, plan)
             mutableSessions.value = sessions.value + entry
             transferred = true
             return entry
@@ -105,6 +130,7 @@ class SandboxSessionService internal constructor(
 class SandboxSessionEntry internal constructor(
     val review: SandboxPermissionReview,
     val session: ManagedSandboxSession,
+    internal val plan: SandboxSessionPlan,
 ) {
     val id: String = UUID.randomUUID().toString()
 }
@@ -113,6 +139,11 @@ internal interface SandboxSessionBackend {
     fun prepare(command: SandboxCommand): SandboxSessionPlan
 
     fun launch(plan: SandboxSessionPlan): ManagedSandboxSession
+
+    fun prepareEscalation(
+        base: SandboxSessionPlan,
+        additional: SandboxEscalation,
+    ): SandboxEscalationPlan = CageforgeEscalationLauncher().prepare(base, additional)
 }
 
 private class NativeSandboxSessionBackend : SandboxSessionBackend {
