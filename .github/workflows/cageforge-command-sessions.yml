@@ -30,7 +30,7 @@ jobs:
       matrix:
         os: [macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -44,6 +44,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
       - name: Build and check session module
+        timeout-minutes: 10
         run: ./gradlew :boss-command-sandbox:check :boss-command-sandbox:nativeSecurityTestBundle --no-daemon --max-workers=2 --console=plain
       - name: Stage self-contained consumer
         run: |
@@ -69,17 +70,19 @@ jobs:
           done < <(find "$stage/lib" -maxdepth 1 -type f -name '*.jar' -print0 | sort -z)
           echo "BOSS_NATIVE_CP=$classpath" >> "$GITHUB_ENV"
       - name: Explicit Windows setup
+        timeout-minutes: 2
         if: runner.os == 'Windows'
         env:
           BOSS_CAGEFORGE_SETUP_MARKER: ${{ runner.temp }}/boss-command-setup-owned
         run: java -cp "$BOSS_NATIVE_CP" ai.rever.boss.sandbox.CommandWindowsSetup install
       - name: Native root and descendant enforcement
-        timeout-minutes: 6
+        timeout-minutes: 3
         run: |
           set -euo pipefail
-          java -cp "$BOSS_NATIVE_CP" org.junit.runner.JUnitCore ai.rever.boss.sandbox.CommandNativeSecurityTest \
+          java -cp "$BOSS_NATIVE_CP" ai.rever.boss.sandbox.CommandNativeTestRunner \
             2>&1 | tee "$RUNNER_TEMP/boss-command-native.log"
       - name: Remove owned Windows setup
+        timeout-minutes: 2
         if: always() && runner.os == 'Windows'
         env:
           BOSS_CAGEFORGE_SETUP_MARKER: ${{ runner.temp }}/boss-command-setup-owned

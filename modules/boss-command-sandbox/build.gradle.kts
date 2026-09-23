@@ -24,9 +24,6 @@ tasks.register<Test>("nativeSecurityTest") {
     description = "Tests root and descendant isolation on a prepared native backend"
     testClassesDirs = nativeSecurity.output.classesDirs
     classpath = nativeSecurity.runtimeClasspath
-    doFirst {
-        systemProperty("boss.sandbox.probe.classpath", classpath.asPath)
-    }
 }
 
 tasks.register<Tar>("nativeSecurityTestBundle") {

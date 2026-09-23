@@ -195,8 +195,11 @@ stop_guest() {
 }
 
 wait_for_ssh() {
-    for _ in {1..120}; do
+    for attempt in {1..120}; do
         ssh_guest true >/dev/null 2>&1 && return
+        if (( attempt % 10 == 0 )); then
+            echo "[boss] waiting for guest SSH (attempt $attempt/120)"
+        fi
         kill -0 "$qemu_pid" 2>/dev/null || { tail -n 100 "$serial_log" >&2 || true; cat "$stderr_log" >&2 || true; exit 70; }
         sleep 2
     done
@@ -207,7 +210,10 @@ wait_for_ssh() {
 
 wait_for_bootstrap() {
     local wait_for_cloud_init=$1
-    for _ in {1..180}; do
+    for attempt in {1..180}; do
+        if (( attempt % 10 == 0 )); then
+            echo "[boss] waiting for guest bootstrap (attempt $attempt/180)"
+        fi
         if ssh_guest 'sudo test -f /var/lib/boss-cageforge-bootstrap-complete' >/dev/null 2>&1; then
             # The marker is written by the final cloud-init command. Wait until that
             # command has returned before powering off; otherwise the next restricted

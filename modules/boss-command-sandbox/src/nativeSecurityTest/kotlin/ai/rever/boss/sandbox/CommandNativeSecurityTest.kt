@@ -24,8 +24,15 @@ class CommandNativeSecurityTest {
     private val launcher = CageforgeSessionLauncher()
     private val javaHome = Path.of(System.getProperty("java.home")).toRealPath()
     private val executable = javaHome.resolve("bin/" + if (File.separatorChar == '\\') "java.exe" else "java")
+
+    // The pure-Java child needs only its classes, not the host's JUnit/Kotlin/JNI jars.
     private val probeClasspath =
-        System.getProperty("boss.sandbox.probe.classpath", System.getProperty("java.class.path"))
+        Path
+            .of(
+                CommandSecurityProbe::class.java.protectionDomain.codeSource.location
+                    .toURI(),
+            ).toRealPath()
+            .toString()
 
     @Test(timeout = 90000)
     fun rootAndDescendantsEnforceFilesystemAndNetworkPolicy() {
@@ -38,12 +45,15 @@ class CommandNativeSecurityTest {
             Socket("127.0.0.1", server.localPort).use { server.accept().close() }
             val arguments = listOf("root", project.toString(), outside.toString(), server.localPort.toString())
             val command = command(project, arguments)
+            CommandNativeTestRunner.stage("preparing root policy")
             val plan = launcher.prepare(command)
             // A disk edit cannot replace the already reviewed command/policy snapshot.
             Files.writeString(command.policyFile, "malformed replacement")
             runBlocking {
+                CommandNativeTestRunner.stage("launching root boundary")
                 val session = launcher.launch(plan, plan.approvalDigest).manage()
                 try {
+                    CommandNativeTestRunner.stage("waiting for root and descendant enforcement probes")
                     session.closeInput()
                     val output = session.awaitCompletion()
                     assertEquals(null, output.failure, output.failure?.stackTraceToString())
@@ -51,6 +61,7 @@ class CommandNativeSecurityTest {
                     assertTrue(output.stdout.text.contains("SECURITY_OK:root"), output.stdout.text)
                     assertTrue(output.stdout.text.contains("SECURITY_OK:descendant"), output.stdout.text)
                 } finally {
+                    CommandNativeTestRunner.stage("closing root boundary")
                     session.stop()
                 }
             }
@@ -65,14 +76,18 @@ class CommandNativeSecurityTest {
     fun closingSessionTerminatesRunningDescendant() {
         val project = temporary.newFolder("tree").toPath()
         Files.createDirectory(project.resolve(".git"))
+        CommandNativeTestRunner.stage("preparing descendant termination policy")
         val plan = launcher.prepare(command(project, listOf("tree", project.toString())))
         val heartbeat = project.resolve("heartbeat")
+        CommandNativeTestRunner.stage("launching heartbeat boundary")
         launcher.launch(plan, plan.approvalDigest).use {
+            CommandNativeTestRunner.stage("waiting for descendant heartbeat")
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
             while ((!Files.exists(heartbeat) || Files.size(heartbeat) < 2) && System.nanoTime() < deadline) {
                 Thread.sleep(25)
             }
             assertTrue(Files.exists(heartbeat) && Files.size(heartbeat) >= 2, "Descendant did not start")
+            CommandNativeTestRunner.stage("closing heartbeat boundary")
         }
         val stoppedSize = Files.size(heartbeat)
         Thread.sleep(300)

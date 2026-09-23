@@ -9,5 +9,4 @@ done < <(find "$bundle_root/lib" -maxdepth 1 -type f -name '*.jar' -print0 | sor
 classpath=$(IFS=:; printf '%s' "${classpath_entries[*]}")
 test_home=$(mktemp -d /tmp/boss-command-test-home.XXXXXX)
 trap 'rmdir "$test_home" 2>/dev/null || true' EXIT
-java -Duser.home="$test_home" -cp "$classpath" org.junit.runner.JUnitCore \
-    ai.rever.boss.sandbox.CommandNativeSecurityTest
+java -Duser.home="$test_home" -cp "$classpath" ai.rever.boss.sandbox.CommandNativeTestRunner
