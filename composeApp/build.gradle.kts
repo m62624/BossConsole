@@ -1012,6 +1012,7 @@ kotlin {
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.kotlinx.coroutines.swing)
+            implementation(project(":boss-command-sandbox"))
 
             // Microkernel infrastructure (optional KERNEL mode)
             // Excluded on Windows ARM64 where protoc is unavailable

@@ -36,6 +36,9 @@ dependencyResolutionManagement {
 
 include(":composeApp")
 include(":server")
+// Command sessions do not depend on the microkernel or protoc.
+include(":boss-command-sandbox")
+project(":boss-command-sandbox").projectDir = file("modules/boss-command-sandbox")
 // Microkernel architecture modules
 // protoc and protoc-gen-grpc-java do not publish Windows ARM64 binaries,
 // so all microkernel modules (which depend on boss-ipc proto generation)

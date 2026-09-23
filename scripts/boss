@@ -224,7 +224,7 @@ case "$1" in
         esac
         ;;
 
-    status|doctor|mcp|completion)
+    status|doctor|mcp|completion|--sandbox)
         forward_to_boss "$@"
         ;;
 
@@ -248,6 +248,7 @@ Commands:
   doctor                 Reports problems in the running BOSS instance (exit 2 when degraded)
   mcp <action> [args]    Discovers and invokes desktop MCP tools (list, describe, invoke)
   completion <shell>     Generates shell completion script (bash, zsh, fish)
+  --sandbox              Start BOSS with opt-in sandbox command sessions enabled
   url <url>              Opens a URL in Fluck browser
   workspace <config>     Loads a workspace configuration
   file <path>            Opens a file in the editor

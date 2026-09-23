@@ -54,6 +54,7 @@ import ai.rever.boss.icons.FileIcons
 import ai.rever.boss.keymap.KeymapSettingsManager
 import ai.rever.boss.keymap.model.KeymapActions
 import ai.rever.boss.mcp.McpToolRegistryImpl
+import ai.rever.boss.platform.SandboxSessionDialogs
 import ai.rever.boss.platform.rememberDirectoryPicker
 import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.top
@@ -438,10 +439,20 @@ internal fun BossAppDialogs(state: BossAppState) {
     }
 
     // The tools launcher's dialog.
+    SandboxSessionDialogs(
+        windowId = windowId,
+        projectDirectory = selectedProject.path,
+        showManager = state.showSandboxSessions,
+        onDismiss = { state.showSandboxSessions = false },
+    )
     if (state.showToolLauncherDialog) {
         // In the MAIN composition, not inside whichever chrome raised it - see BossAppState.
         state.draggablePanelComponent.ToolLauncherDialog(
             onDismiss = { state.showToolLauncherDialog = false },
+            onSandboxSessions = {
+                state.showToolLauncherDialog = false
+                state.showSandboxSessions = true
+            },
         )
     }
 

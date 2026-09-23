@@ -102,6 +102,7 @@ internal class BossAppState(
      * `ToolLauncherButton`.
      */
     var showToolLauncherDialog by mutableStateOf(false)
+    var showSandboxSessions by mutableStateOf(false)
 
     /** Window-local operational view of plugin lifecycle problems and their safe remedies. */
     var showPluginHealthCenter by mutableStateOf(false)

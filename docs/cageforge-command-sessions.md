@@ -1,0 +1,181 @@
+# Sandboxed command sessions
+
+BOSS command sandboxing is an explicit opt-in launch of a root executable. Cageforge
+owns that process and all its descendants. Starting `codex`, for example, places the
+shells, Git commands and compilers it creates inside the same native boundary.
+An MCP call is a transport operation, not a new sandbox boundary. Ordinary terminal
+and plugin execution are outside this feature and retain their existing behavior.
+
+This is process-tree isolation, not application-wide or machine-wide isolation.
+An agent launched outside a sandbox session can execute commands directly without
+calling BOSS; only commands it explicitly launches through the sandbox tools enter
+this boundary. An agent launched as the sandbox root has its child processes
+constrained by the same policy even when it does not use MCP. Calls to external
+MCP servers or other already-running services do not bring those services inside
+the process boundary. Enabling this feature alone does not sandbox an agent.
+
+The subsystem is off by default. Start BOSS using `boss --sandbox`, or explicitly
+enable **Tools > Sandbox command sessions** in an already-running BOSS. The startup
+flag is used alone and refuses to silently modify an existing BOSS instance. It
+does not redirect ordinary command execution. Disabling the subsystem unregisters
+its MCP tools, revokes its approvals and stops its sandbox sessions. The setting is
+not persisted; the next BOSS run is disabled unless explicitly enabled again.
+
+## Launch from BOSS
+
+Open **Tools > Sandbox command sessions**. Enter the absolute project directory and
+policy TOML path, choose a profile, then enter the executable and a JSON array of
+arguments. For example, executable `node` with arguments `["script.js", "a b", ""]`
+passes three distinct arguments, including the final empty one. BOSS does not parse
+these fields as a shell command.
+
+**Review and run** prepares the native permission request without starting a process.
+The dialog shows the project, exact argv and Cageforge's resolved permissions. Deny,
+approve once, or remember that exact review until BOSS closes. Changed commands or
+policies still require a new approval. The manager also offers **Revoke remembered
+approvals**, which invalidates pending approvals but does not stop already-running
+sessions.
+
+The manager retains bounded stdout/stderr tails, accepts lines on stdin, sends EOF,
+and stops the root process together with its descendants. Closing the manager does
+not stop sessions; use **Stop session and descendants**, or quit BOSS. Finished
+output remains until removed. At most eight sessions are retained. Application
+shutdown revokes consent and waits for native cleanup, including launches that were
+in progress when shutdown started. There is no implicit Windows setup or elevation.
+
+When enabled, operator-facing MCP tools also expose the session mechanism through
+`boss mcp invoke sandbox_start --args '{"project":"/absolute/project","policy":"/absolute/policy.toml","profile":"base","argv":["tool","arg"],"reason":"Run project checks"}'`.
+The result is a ticket, not permission to run. Use `sandbox_request_status` with
+`request_id` to poll it while the user reviews permissions in BOSS. A BOSS window
+must be available for review. A disconnected caller does not cancel a submitted
+request. Completed tickets can be removed with `sandbox_forget_request`; at most
+eight tickets are retained independently of the eight-session limit.
+
+`sandbox_sessions`, `sandbox_output`, `sandbox_input`, `sandbox_stop` and
+`sandbox_remove` operate on these sessions. Input is explicit UTF-8 text with no
+implicit newline; `close_stdin` sends EOF. No MCP tool enables the subsystem or
+approves permissions. These are operator tools, not an agent-scoped endpoint.
+The separate agent endpoint/token provisioning remains integration work. The
+operator-facing `sandbox_request_permissions` flow is described below.
+
+## Policy and approval contract
+
+A session selects a project directory, a TOML file, a named CLI profile, and an
+executable with separate arguments. BOSS reads the policy once, adds a final child
+profile containing that exact command and working directory, then asks Cageforge
+Java 0.7.1 for its permission request. Approval identifies this immutable snapshot.
+Edits to the TOML file affect the next preparation, never a running session. A plan
+can launch once. A failed launch has no unsandboxed retry or fallback.
+
+The final child profile `boss-command-session` is reserved. It enforces preflight
+approval for the initial launch and selects Cageforge's mode required for
+on-demand escalation. It also captures stdin/stdout/stderr. It inherits the
+selected policy; native Cageforge resolves all filesystem, environment, network
+and OS-specific rules. MCP additional-permission requests are still integration
+work, described below.
+The project directory is the resolution context even when the TOML file is elsewhere.
+There is no automatic discovery or execution of repository-provided commands.
+
+TOML is trusted configuration. The permissions shown for review may grant resources
+outside the project. A configuration file is not itself a security ceiling. BOSS
+must show the resolved permission request before issuing a grant. No MCP credentials
+are added to ordinary command sessions. Agent connection configuration belongs only
+to explicitly requested agent sessions.
+
+## TOML inheritance
+
+Use one project policy with shared profiles and named CLI profiles. Cageforge's
+`inherits` performs the merge; BOSS does not concatenate independent policy files
+or implement a second TOML merger. Parents are applied in inheritance order, shared
+ancestors once, and children last. A platform overlay participates at each profile.
+
+- Matching filesystem rules are replaced by canonical target identity, not appended
+  indiscriminately. Different targets remain present.
+- `workspace_roots` maps paths to booleans; `false` disables an inherited root.
+- Command arguments replace the inherited argument list, including an empty list.
+- Environment set/remove entries override the same case-insensitive variable name.
+- Changing a policy mode can clear inherited mode-specific rules. An empty list is
+  not a general instruction to remove inherited permissions.
+- Cycles, unknown fields, duplicate canonical rules and unknown profiles fail.
+
+Custom runtimes can require explicit readable paths. On macOS, custom executable
+roots additionally need `runtime.executable_roots`; read access alone does not grant
+executable mapping. Windows setup is explicit and may require elevation. Launch only
+verifies existing setup; it never invokes UAC implicitly.
+
+The session uses pipes. This does not promise a PTY, terminal emulation, resize
+support, or compatibility with CLIs that require a controlling terminal.
+
+## Additional permission requests
+
+The operator-facing `sandbox_request_permissions` tool accepts `session_id`, exact
+`argv`, `filesystem` (`[{"operation":"read","path":"/absolute/input"}]`), `network`
+(for example `["example.com:443"]`) and `reason`. It returns a ticket to poll through
+`sandbox_request_status`. It has no approval argument. A running parent session and
+a BOSS review window are required.
+
+BOSS derives a command-specific runtime from the parent's captured TOML bytes, never
+from a newly read policy file, and uses Cageforge's `requestEscalation`,
+`approveEscalation` and `launchEscalated` APIs. The GUI shows the exact command,
+reason and full expanded native permission request. Approval starts a new command
+boundary. The original agent remains running under its original restrictions.
+The command-specific runtime has no previous process to stop; this is not an
+in-place expansion or a restart of the agent. Additional rights do not accumulate
+into the parent policy. Every additional command is reviewed independently, unless
+that exact command and expanded policy were approved until BOSS closes.
+
+On Windows with Cageforge Java 0.7.1, BOSS rejects concurrent additional-permission
+commands before preparation. Native testing exposed a shared filesystem read authority
+that let the running parent read a file granted to another command. Initial sandbox
+sessions remain available; dynamic command rights on Windows require an upstream
+Cageforge isolation fix and a new binding release. This limitation is fail closed.
+
+The MCP request must identify the command, project/session, additional filesystem
+or network capabilities, and a human-readable reason. The agent requests access;
+it never supplies the approval decision. BOSS must show the exact command and
+resolved native permissions in the GUI before launching anything with more access.
+Ordinary MCP tool trust is not authorization for arbitrary sandbox capabilities.
+
+The host consent queue implements these two scopes:
+
+- **Allow once**: one execution of the reviewed command and policy. Replaying the
+  authorization is rejected, including after a failed launch.
+- **Allow until BOSS closes**: remember only the exact reviewed command, policy
+  and capabilities in this application process. Changed requests still prompt.
+  Nothing is persisted; restarting BOSS asks again. Revocation invalidates pending
+  responses and unused authorizations as well as remembered decisions.
+
+Denial, timeout, cancellation, queue overflow and application shutdown never grant
+permission. A stale dialog cannot approve the next request. This consent mechanism
+and its unit tests are implemented in the session module. Initial GUI launches use
+this same queue. Native escalation has a separate API-level security test; its
+agent-only endpoint/token provisioning remains integration work. Native service
+tests also exercise denial, approval, the additional command's access and the
+continued lifetime of the unchanged parent process.
+
+## Verification work
+
+The command session module separates immutable preparation and native launch from
+Compose and MCP integration. Ordinary tests cover snapshot identity, argument
+handling, bounds, approval replay, cancellation during native acquisition and
+application shutdown. Compose tests cover explicit submission, exact argv and the
+request-specific arming of both approval buttons. Native policy and security tests exercise
+the published binding and real backend on Linux, macOS and Windows. Linux enforcement
+runs in a prepared QEMU guest with the consumer compiled on the host. The descendant
+termination probe uses the application session service and its consent queue.
+GUI coverage for the full agent escalation flow remains required before completion.
+
+On Windows, each native test restores the explicitly installed `WindowsSetup`
+before JUnit removes that test's temporary files, because Cageforge restores
+journaled ACLs during uninstall. The Java probe grants only its classes and the
+runtime files it opens; it does not recursively grant the entire JDK. The cwd
+probe writes relative paths and the host verifies their contents in the selected
+project; it does not use `toRealPath`, which enumerates ungranted Windows ancestor
+directories.
+
+The existing `feat/cageforge-secure-plugin` branch supplies useful native provisioning
+and QEMU patterns, but its protected plugin lifecycle is not this feature's launch
+model. In particular, replacing a plugin worker cannot isolate commands launched by
+an unrelated terminal plugin. No claim that the old branch works or fails on all
+platforms follows from its presence in Git; its CI and native evidence need separate
+inspection.

@@ -182,10 +182,13 @@ private fun containRenderFault(
 private val startupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
 fun main(args: Array<String>) {
+    val sandboxStartup =
+        ai.rever.boss.sandbox.SandboxStartupOptions
+            .parse(args)
     // -------------------------------------------------------------------------
     // Phase 1: Headless CLI & credential helper dispatch (before AWT / logging)
     // -------------------------------------------------------------------------
-    when (val earlyResult = CliBootstrap.dispatchHeadless(args)) {
+    when (val earlyResult = CliBootstrap.dispatchHeadless(sandboxStartup.arguments)) {
         is CliDispatchResult.Exit -> exitProcess(earlyResult.code)
         CliDispatchResult.Continue -> Unit
     }
@@ -287,6 +290,10 @@ fun main(args: Array<String>) {
     // Single-instance check: ensure only one BOSS instance runs
     if (!SingleInstanceManager.acquireLock()) {
         logger.info(LogCategory.SYSTEM, "Another BOSS instance is already running")
+        if (sandboxStartup.enabled) {
+            System.err.println("BOSS is already running. Enable Sandbox command sessions from its Tools menu.")
+            exitProcess(1)
+        }
         val forwarded = CliBootstrap.forwardToExistingInstance(args)
         exitProcess(if (forwarded) 0 else 1)
     }
@@ -318,6 +325,12 @@ fun main(args: Array<String>) {
     // Phase 5: Shutdown hook registration
     // -------------------------------------------------------------------------
     ShutdownSequence.register { kernelBootstrap }
+    if (sandboxStartup.enabled) {
+        runBlocking {
+            ai.rever.boss.sandbox.SandboxCommandHost.feature
+                .enable()
+        }
+    }
     logger.info(LogCategory.SYSTEM, "Successfully acquired single-instance lock")
 
     // -------------------------------------------------------------------------
@@ -338,7 +351,7 @@ fun main(args: Array<String>) {
     // -------------------------------------------------------------------------
     // Phase 7: Post-lock CLI, keyboard interceptor, services & plugins
     // -------------------------------------------------------------------------
-    CliBootstrap.dispatchPostLock(args)
+    CliBootstrap.dispatchPostLock(sandboxStartup.arguments)
 
     AWTKeyboardInterceptor.install()
     // macOS already read the theme before AWT; other platforms still need this initialization.
